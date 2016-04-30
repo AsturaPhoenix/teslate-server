@@ -1,4 +1,4 @@
-<project name="Guestbook Highrep" default="compile">
+<project name="SimpleCast Server" default="compile">
   <property environment="env" />
   <property name="appengine.sdk" location="${env.HOME}/google-cloud-sdk/platform/appengine-java-sdk" />
 
