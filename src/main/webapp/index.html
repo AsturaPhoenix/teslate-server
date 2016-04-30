@@ -57,7 +57,7 @@ var b=r.host&&r.host.indexOf("@")>0?r.host.split("@"):!1;b&&(r.auth=b.shift(),r.
       var lastFrame = new Date();
       var lastScreenQuery = new Date();
       var lastScreen = new Date();
-
+      
       function debugInfo() {
         var debug = document.getElementById("debug");
         var status = document.getElementById("status");
@@ -86,11 +86,13 @@ var b=r.host&&r.host.indexOf("@")>0?r.host.split("@"):!1;b&&(r.auth=b.shift(),r.
       }
 
       function proclp() {
-        if (lastProc.getTime() - lastFrame.getTime() > 20000) {
+        lastProc = new Date();
+        
+        if (lastProc.getTime() - lastFrame.getTime() > 20000 &&
+            lastProc.getTime() - lastReload.getTime() > 3000) {
+          lastReload = lastProc;
           location.reload();
         }
-
-        lastProc = new Date();
 
         if (lastProc.getTime() - lastFrameQuery.getTime() > 7500) {
           frame();
