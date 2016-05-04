@@ -16,8 +16,9 @@
 
 package io.baku.simplecast;
 
+import java.io.EOFException;
 import java.io.IOException;
-import java.io.OutputStream;
+import java.io.ObjectInputStream;
 import java.util.HashMap;
 import java.util.Map;
 
@@ -25,9 +26,6 @@ import javax.servlet.http.HttpServlet;
 import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
 
-import com.google.common.io.ByteStreams;
-
-import lombok.AllArgsConstructor;
 import lombok.Synchronized;
 import lombok.extern.java.Log;
 
@@ -35,49 +33,59 @@ import lombok.extern.java.Log;
 public class FrameServlet extends HttpServlet {
   private static final long serialVersionUID = -1428114883956980006L;
   
-  @AllArgsConstructor
-  private static class Frame {
-    public final String mimeType;
-    public final byte[] bytes;
-    public final long lastModified;
-  }
-  
-  private final Map<String, Frame> frames = new HashMap<>();
+  private final Map<String, Session> sessions = new HashMap<>();
 
   @Synchronized
   @Override
   public void doPut(final HttpServletRequest req, final HttpServletResponse resp) throws IOException {
-    frames.put(req.getPathInfo(), new Frame(
-        req.getContentType(),
-        ByteStreams.toByteArray(req.getInputStream()),
-        System.currentTimeMillis()));
+    Session s = sessions.get("nautilus");
+    if (s == null) {
+      s = new Session();
+      sessions.put("nautilus", s);
+    }
+    
+    s.refresh();
+    
+    try (final ObjectInputStream oi = new ObjectInputStream(req.getInputStream())) {
+      while (true) {
+        final int x = oi.readInt(), y = oi.readInt();
+        final byte[] buff = new byte[oi.readInt()];
+        oi.readFully(buff, 0, buff.length);
+        s.update(x, y, buff);
+      }
+    } catch (final EOFException ignore) {
+      s.commit();
+    }
+    
     log.info("Wrote to frame " + req.getPathInfo());
   }
   
+  @Synchronized
   @Override
   protected void doHead(HttpServletRequest req, HttpServletResponse resp) throws IOException {
-    final Frame frame = frames.get(req.getPathInfo());
-    if (frame ==  null) {
+    final String[] pathInfo = req.getPathInfo().split("/");
+    final Session s = sessions.get("nautilus");
+    
+    if (s ==  null) {
       resp.sendError(HttpServletResponse.SC_NOT_FOUND);
     } else {
-      resp.setContentType(frame.mimeType);
-      resp.setDateHeader("Last-Modified", frame.lastModified);
+      resp.setContentType("image/jpeg");
+      resp.setDateHeader("Last-Modified", s.getLastModified(pathInfo[1]));
     }
   }
   
   @Synchronized
   @Override
   public void doGet(final HttpServletRequest req, final HttpServletResponse resp) throws IOException {
-    final Frame frame = frames.get(req.getPathInfo());
-    log.info("Read from frame " + req.getPathInfo());
-    if (frame ==  null) {
+    final String[] pathInfo = req.getPathInfo().split("/");
+    final Session s = sessions.get("nautilus");
+    
+    if (s ==  null) {
       resp.sendError(HttpServletResponse.SC_NOT_FOUND);
     } else {
-      resp.setContentType(frame.mimeType);
-      resp.setDateHeader("Last-Modified", frame.lastModified);
-      try (final OutputStream o = resp.getOutputStream()) {
-        o.write(frame.bytes);
-      }
+      s.get(pathInfo[1], resp);
     }
+    
+    log.info("Read from frame " + req.getPathInfo());
   }
 }

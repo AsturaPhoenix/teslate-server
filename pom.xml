@@ -24,6 +24,7 @@
 	<properties>
 		<appengine.app.version>1</appengine.app.version>
 		<project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+		<checkstyle.skip>true</checkstyle.skip>
 	</properties>
 
 	<dependencies>
@@ -34,6 +35,16 @@
 			<version>3.1.0</version>
 			<scope>provided</scope>
 		</dependency>
+		<dependency>
+	      <groupId>com.google.appengine</groupId>
+	      <artifactId>appengine-api-1.0-sdk</artifactId>
+	       <version>1.9.36</version>
+	    </dependency>
+	    <dependency>
+	      <groupId>com.google.appengine.tools</groupId>
+	      <artifactId>appengine-gcs-client</artifactId>
+	      <version>RELEASE</version>
+	    </dependency>
 		<dependency>
 			<groupId>com.google.cloud</groupId>
 			<artifactId>gcloud-java</artifactId>
