@@ -12,11 +12,6 @@ import com.google.appengine.api.images.Composite;
 import com.google.appengine.api.images.Image;
 import com.google.appengine.api.images.ImagesService;
 import com.google.appengine.api.images.ImagesService.OutputEncoding;
-import com.google.appengine.tools.cloudstorage.GcsFileMetadata;
-import com.google.appengine.tools.cloudstorage.GcsFileOptions;
-import com.google.appengine.tools.cloudstorage.GcsFilename;
-import com.google.appengine.tools.cloudstorage.GcsService;
-import com.google.appengine.tools.cloudstorage.GcsServiceFactory;
 
 import lombok.extern.java.Log;
 
@@ -25,50 +20,27 @@ import com.google.appengine.api.images.ImagesServiceFactory;
 @Log
 public class Session {
   private static final String BUCKET = "simplecast-1297.appspot.com";
-  private static final GcsFileOptions gcsFileOptions = new GcsFileOptions.Builder()
-      .mimeType("image/jpeg")
-      .build();
   private static final long
       STABLE_TIME = 4000,
-      DIFF_THRESH = 128 * 128 * 256 * 256,
+      DIFF_THRESH = 192 * 192 * 256 * 256,
       STABLE_THRESH = 8 * 8 * 256 * 256;
   
   private static final BlobstoreService bs = BlobstoreServiceFactory.getBlobstoreService();
-  private static final GcsService gcsService = GcsServiceFactory.createGcsService();
   private static final ImagesService imagesService = ImagesServiceFactory.getImagesService();
   
-  private final BlobKey frameKey;
-  private final GcsFilename
-      frameFilename,
-      stableFilename,
-      prevFilename;
+  private Image
+      frameImage,
+      stableImage,
+      prevImage;
   private final ArrayList<Composite> composites = new ArrayList<>();
+  private long lastScreen;
   
   private int[][] initialHistogram;
   
-  private GcsFilename gcsFilename(final String variant) {
-    return new GcsFilename(BUCKET, variant);
-  }
-  
-  private BlobKey blobKey(final String variant) {
-    return bs.createGsBlobKey("/gs/" + BUCKET + "/" + variant);
-  }
-  
-  public Session() {
-    frameKey = blobKey("frame.jpeg");
-    frameFilename = gcsFilename("frame.jpeg");
-    stableFilename = gcsFilename("stable.jpeg");
-    prevFilename = gcsFilename("previous.jpeg");
-  }
-  
   public void refresh() throws IOException {
     composites.clear();
-    if (gcsService.getMetadata(frameFilename) != null) {
-      final Image original = ImagesServiceFactory.makeImageFromBlob(frameKey);
-      initialHistogram = imagesService.histogram(original);
-      composites.add(ImagesServiceFactory.makeComposite(original, 0, 0, 1, Composite.Anchor.TOP_LEFT));
-    } else {
-      initialHistogram = null;
+    if (frameImage != null) {
+      composites.add(ImagesServiceFactory.makeComposite(frameImage, 0, 0, 1, Composite.Anchor.TOP_LEFT));
     }
   }
   
@@ -102,40 +74,44 @@ public class Session {
   }
   
   public void commit() throws IOException {
-    final Image result = composite();
+    frameImage = composite();
     
     final boolean copyStable, copyPrevious;
+    final int[][] frameHistogram = imagesService.histogram(frameImage);
     if (initialHistogram == null) {
       copyStable = copyPrevious = true;
     } else {
-      long diff = diff(initialHistogram, imagesService.histogram(result));
+      long diff = diff(initialHistogram, frameHistogram);
       
       if (diff > DIFF_THRESH) {
-        final GcsFileMetadata prevMd = gcsService.getMetadata(prevFilename);
-        copyPrevious = prevMd == null || prevMd.getLastModified().getTime() < System.currentTimeMillis() - STABLE_TIME;
+        copyPrevious =  lastScreen < System.currentTimeMillis() - STABLE_TIME;
       } else {
         copyPrevious = false;
       }
       
       copyStable = diff < STABLE_THRESH;
     }
+    initialHistogram = frameHistogram;
 
     if (copyStable) {
-      gcsService.copy(frameFilename, stableFilename);
+      stableImage = frameImage;
     }
     if (copyPrevious) {
-      gcsService.copy(stableFilename, prevFilename);
+      prevImage = stableImage;
+      lastScreen = System.currentTimeMillis();
     }
-    
-    gcsService.createOrReplace(frameFilename, gcsFileOptions,
-        ByteBuffer.wrap(result.getImageData()));
   }
   
   public void get(final String variant, final HttpServletResponse resp) throws IOException {
-    bs.serve(blobKey(variant), resp);
+    resp.setContentType("image/jpeg");
+    if (variant.equals("frame.jpeg")) {
+      resp.getOutputStream().write(frameImage.getImageData());
+    } else {
+      resp.getOutputStream().write(prevImage.getImageData());
+    }
   }
   
   public long getLastModified(final String variant) throws IOException {
-    return gcsService.getMetadata(gcsFilename(variant)).getLastModified().getTime();
+    return lastScreen;
   }
 }
