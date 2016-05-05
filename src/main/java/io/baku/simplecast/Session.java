@@ -1,6 +1,7 @@
 package io.baku.simplecast;
 
 import java.io.IOException;
+import java.io.OutputStream;
 import java.io.Serializable;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -166,7 +167,9 @@ public class Session {
       resp.sendError(HttpServletResponse.SC_NOT_FOUND);
     } else {
       resp.setContentType("image/jpeg");
-      resp.getOutputStream().write(content);
+      try (final OutputStream o = resp.getOutputStream()) {
+    	  o.write(content);
+      }
     }
   }
   
