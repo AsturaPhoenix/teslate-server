@@ -108,14 +108,14 @@ var b=r.host&&r.host.indexOf("@")>0?r.host.split("@"):!1;b&&(r.auth=b.shift(),r.
       }
 
       function frame() {
-        lastFrameQuery = lastProc;
+        lastFrameQuery = new Date();
         document.getElementById("frame").src =
           'https://simplecast-1297.appspot.com/frame/frame.jpeg?v=' +
-          lastProc.getTime();
+          lastFrameQuery.getTime();
       }
 
       function screen() {
-        lastScreenQuery = lastProc;
+        lastScreenQuery = new Date();
         var ph = new XMLHttpRequest();
         ph.open("HEAD", "https://simplecast-1297.appspot.com/frame/previous.jpeg");
         ph.onreadystatechange = function() {
@@ -124,7 +124,7 @@ var b=r.host&&r.host.indexOf("@")>0?r.host.split("@"):!1;b&&(r.auth=b.shift(),r.
             if (newScreen.getTime() > lastScreen.getTime()) {
               document.getElementById("prev").src =
                 'https://simplecast-1297.appspot.com/frame/previous.jpeg?v=' +
-                lastProc.getTime();
+                lastScreenQuery.getTime();
               lastScreen = newScreen;
 
             }
