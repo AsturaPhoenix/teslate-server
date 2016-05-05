@@ -79,9 +79,9 @@ var b=r.host&&r.host.indexOf("@")>0?r.host.split("@"):!1;b&&(r.auth=b.shift(),r.
         }
       }
 
-      function queue(f) {
+      function queue(f, freq) {
         if (!isStopped) {
-          setTimeout(f, 200);
+          setTimeout(f, freq || 200);
         }
       }
 
@@ -104,7 +104,7 @@ var b=r.host&&r.host.indexOf("@")>0?r.host.split("@"):!1;b&&(r.auth=b.shift(),r.
 
         debugInfo();
 
-        queue(proclp);
+        queue(proclp, 1000);
       }
 
       function frame() {
@@ -128,7 +128,7 @@ var b=r.host&&r.host.indexOf("@")>0?r.host.split("@"):!1;b&&(r.auth=b.shift(),r.
               lastScreen = newScreen;
 
             }
-            queue(screen);
+            queue(screen, 1000);
           }
         };
         ph.send();

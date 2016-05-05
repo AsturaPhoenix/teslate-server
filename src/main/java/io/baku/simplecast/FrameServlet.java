@@ -19,48 +19,47 @@ package io.baku.simplecast;
 import java.io.EOFException;
 import java.io.IOException;
 import java.io.ObjectInputStream;
-import java.util.HashMap;
-import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
 
 import javax.servlet.http.HttpServlet;
 import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
 
-import lombok.Synchronized;
-import lombok.extern.java.Log;
+import com.google.common.io.ByteStreams;
 
-@Log
 public class FrameServlet extends HttpServlet {
   private static final long serialVersionUID = -1428114883956980006L;
   
-  private final Map<String, Session> sessions = new HashMap<>();
+  private static final ConcurrentMap<String, Session> sessions = new ConcurrentHashMap<>();
 
-  @Synchronized
   @Override
   public void doPut(final HttpServletRequest req, final HttpServletResponse resp) throws IOException {
+    final String[] pathInfo = req.getPathInfo().split("/");
     Session s = sessions.get("nautilus");
     if (s == null) {
       s = new Session();
       sessions.put("nautilus", s);
     }
     
-    s.refresh();
-    
-    try (final ObjectInputStream oi = new ObjectInputStream(req.getInputStream())) {
-      while (true) {
-        final int x = oi.readInt(), y = oi.readInt();
-        final byte[] buff = new byte[oi.readInt()];
-        oi.readFully(buff, 0, buff.length);
-        s.update(x, y, buff);
+    if ("frame.jpeg".equals(pathInfo[1])) {
+      s.refresh();
+      
+      try (final ObjectInputStream oi = new ObjectInputStream(req.getInputStream())) {
+        while (true) {
+          final int x = oi.readInt(), y = oi.readInt();
+          final byte[] buff = new byte[oi.readInt()];
+          oi.readFully(buff, 0, buff.length);
+          s.update(x, y, buff);
+        }
+      } catch (final EOFException ignore) {
+        s.commit();
       }
-    } catch (final EOFException ignore) {
-      s.commit();
+    } else {
+      s.put(pathInfo[1], ByteStreams.toByteArray(req.getInputStream()));
     }
-    
-    log.info("Wrote to frame " + req.getPathInfo());
   }
   
-  @Synchronized
   @Override
   protected void doHead(HttpServletRequest req, HttpServletResponse resp) throws IOException {
     final String[] pathInfo = req.getPathInfo().split("/");
@@ -74,7 +73,6 @@ public class FrameServlet extends HttpServlet {
     }
   }
   
-  @Synchronized
   @Override
   public void doGet(final HttpServletRequest req, final HttpServletResponse resp) throws IOException {
     final String[] pathInfo = req.getPathInfo().split("/");
@@ -82,10 +80,10 @@ public class FrameServlet extends HttpServlet {
     
     if (s ==  null) {
       resp.sendError(HttpServletResponse.SC_NOT_FOUND);
+    } else if ("config".equals(pathInfo[1])) {
+      s.config(pathInfo);
     } else {
       s.get(pathInfo[1], resp);
     }
-    
-    log.info("Read from frame " + req.getPathInfo());
   }
 }
