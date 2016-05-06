@@ -2,13 +2,12 @@ package io.baku.simplecast;
 
 import java.io.IOException;
 import java.io.OutputStream;
-import java.io.Serializable;
 import java.util.ArrayList;
 import java.util.Collections;
-import java.util.Map;
 
 import javax.cache.Cache;
 import javax.cache.CacheException;
+import javax.cache.CacheListener;
 import javax.cache.CacheManager;
 import javax.servlet.http.HttpServletResponse;
 
@@ -18,6 +17,7 @@ import com.google.appengine.api.images.Image;
 import com.google.appengine.api.images.ImagesService;
 import com.google.appengine.api.images.ImagesService.OutputEncoding;
 
+import lombok.RequiredArgsConstructor;
 import lombok.extern.java.Log;
 
 import com.google.appengine.api.images.ImagesServiceFactory;
@@ -28,18 +28,22 @@ import com.google.appengine.api.taskqueue.TaskOptions;
 import com.google.appengine.api.taskqueue.TaskOptions.Method;
 
 @Log
+@RequiredArgsConstructor
 public class Session {
+  private static final int
+      SLEEP_PERIOD = 50,
+      MAX_SLEEPS = 2000 / SLEEP_PERIOD;
   private static final long
       DIFF_MAGNITUDE = 10000;
   private static long
-      SCREEN_REFRACTORY = 4000,
+      SCREEN_REFRACTORY = 5000,
       STABLE_TIME = 1500,
-      DIFF_THRESH = 50 * DIFF_MAGNITUDE;
+      DIFF_THRESH = 55 * DIFF_MAGNITUDE;
   
   private static final ImagesService imagesService = ImagesServiceFactory.getImagesService();
   private static final Queue queue = QueueFactory.getDefaultQueue();
   
-  private static final Map<String, Serializable> cache;
+  private static final Cache cache;
   static {
     Cache c;
     try {
@@ -51,13 +55,14 @@ public class Session {
     cache = c;
   }
   
-  private final ArrayList<Composite> composites = new ArrayList<>();
+  private final String name;
   
+  private final ArrayList<Composite> composites = new ArrayList<>();
   private int[][] initialHistogram;
   
   public void refresh() throws IOException {
     composites.clear();
-    final byte[] frameBytes = (byte[])cache.get("frame.jpeg");
+    final byte[] frameBytes = (byte[])cache.get(name + "/frame.jpeg");
     if (frameBytes != null) {
       final Image frameImage = ImagesServiceFactory.makeImage(frameBytes);
       composites.add(ImagesServiceFactory.makeComposite(frameImage, 0, 0, 1, Composite.Anchor.TOP_LEFT));
@@ -130,7 +135,7 @@ public class Session {
   
   public void commit() throws IOException {
     final Image frameImage = compositeWithRetry();
-    cache.put("frame.jpeg", frameImage.getImageData());
+    put("frame.jpeg", frameImage.getImageData());
     
     final boolean copyPrevious;
     final int[][] frameHistogram = histogramWithRetry(frameImage);
@@ -146,23 +151,38 @@ public class Session {
       }
     }
 
-    queue.add(TaskOptions.Builder.withUrl("/frame/stable.jpeg")
+    final String stableKey = "/frame/" + name + "/stable.jpeg";
+    queue.add(TaskOptions.Builder.withUrl(stableKey)
         .etaMillis(System.currentTimeMillis() + STABLE_TIME)
         .method(Method.PUT)
         .payload(frameImage.getImageData()));
     
     if (copyPrevious) {
-      cache.put("previous.jpeg", cache.get("stable.jpeg"));
-      cache.put("last-modified", System.currentTimeMillis());
+      put("previous.jpeg", (byte[])cache.get(name + "/stable.jpeg"));
     }
   }
   
+  @SuppressWarnings("unchecked")
   public void put(final String variant, final byte[] payload) {
-    cache.put(variant, payload);
+    final String key = name + "/" + variant;
+    cache.put(key, payload);
+    cache.put(key + "/last-modified", System.currentTimeMillis());
   }
   
+  @SuppressWarnings("unchecked")
   public void get(final String variant, final HttpServletResponse resp) throws IOException {
-    final byte[] content = (byte[])cache.get(variant);
+    final String key = name + "/" + variant;
+    for (int i = 0; i < MAX_SLEEPS && readLong(key + "/last-accessed") > readLong(key + "/last-modified"); i++) {
+      try {
+        Thread.sleep(SLEEP_PERIOD);
+      } catch (final InterruptedException e) {
+        log.warning(Throwables.getStackTraceAsString(e));
+      }
+    }
+    
+    cache.put(key + "/last-accessed", System.currentTimeMillis());
+    
+    final byte[] content = (byte[])cache.get(key);
     if (content == null) {
       resp.sendError(HttpServletResponse.SC_NOT_FOUND);
     } else {
@@ -173,8 +193,12 @@ public class Session {
     }
   }
   
+  private long readLong(final String key) {
+    final Long value = (Long)cache.get(key);
+    return value == null? Long.MIN_VALUE : value;
+  }
+  
   public long getLastModified(final String variant) throws IOException {
-    final Long lastModified = (Long)cache.get("last-modified");
-    return lastModified == null? Long.MIN_VALUE : lastModified;
+    return readLong(name + "/" + variant + "/last-modified");
   }
 }

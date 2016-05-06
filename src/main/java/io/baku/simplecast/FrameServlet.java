@@ -32,17 +32,32 @@ public class FrameServlet extends HttpServlet {
   private static final long serialVersionUID = -1428114883956980006L;
   
   private static final ConcurrentMap<String, Session> sessions = new ConcurrentHashMap<>();
+  
+  private static class PathInfo {
+    final String name;
+    final String variant;
+    
+    public PathInfo(final HttpServletRequest req) {
+      final String[] parts = req.getPathInfo().split("/");
+      name = parts[1];
+      variant = parts[2];
+    }
+  }
 
   @Override
   public void doPut(final HttpServletRequest req, final HttpServletResponse resp) throws IOException {
-    final String[] pathInfo = req.getPathInfo().split("/");
-    Session s = sessions.get("nautilus");
+    final PathInfo p = new PathInfo(req);
+    
+    Session s = sessions.get(p.name);
     if (s == null) {
-      s = new Session();
-      sessions.put("nautilus", s);
+      final Session candidate = new Session(p.name);
+      s = sessions.putIfAbsent(p.name, candidate);
+      if (s == null) {
+        s = candidate;
+      }
     }
     
-    if ("frame.jpeg".equals(pathInfo[1])) {
+    if ("frame.jpeg".equals(p.variant)) {
       s.refresh();
       
       try (final ObjectInputStream oi = new ObjectInputStream(req.getInputStream())) {
@@ -56,34 +71,32 @@ public class FrameServlet extends HttpServlet {
         s.commit();
       }
     } else {
-      s.put(pathInfo[1], ByteStreams.toByteArray(req.getInputStream()));
+      s.put(p.variant, ByteStreams.toByteArray(req.getInputStream()));
     }
   }
   
   @Override
   protected void doHead(HttpServletRequest req, HttpServletResponse resp) throws IOException {
-    final String[] pathInfo = req.getPathInfo().split("/");
-    final Session s = sessions.get("nautilus");
+    final PathInfo p = new PathInfo(req);
+    final Session s = sessions.get(p.name);
     
     if (s ==  null) {
       resp.sendError(HttpServletResponse.SC_NOT_FOUND);
     } else {
       resp.setContentType("image/jpeg");
-      resp.setDateHeader("Last-Modified", s.getLastModified(pathInfo[1]));
+      resp.setDateHeader("Last-Modified", s.getLastModified(p.variant));
     }
   }
   
   @Override
   public void doGet(final HttpServletRequest req, final HttpServletResponse resp) throws IOException {
-    final String[] pathInfo = req.getPathInfo().split("/");
-    final Session s = sessions.get("nautilus");
+    final PathInfo p = new PathInfo(req);
+    final Session s = sessions.get(p.name);
     
     if (s ==  null) {
       resp.sendError(HttpServletResponse.SC_NOT_FOUND);
-    } else if ("config".equals(pathInfo[1])) {
-      s.config(pathInfo);
     } else {
-      s.get(pathInfo[1], resp);
+      s.get(p.variant, resp);
     }
   }
 }

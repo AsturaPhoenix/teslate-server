@@ -110,20 +110,20 @@ var b=r.host&&r.host.indexOf("@")>0?r.host.split("@"):!1;b&&(r.auth=b.shift(),r.
       function frame() {
         lastFrameQuery = new Date();
         document.getElementById("frame").src =
-          'https://simplecast-1297.appspot.com/frame/frame.jpeg?v=' +
+          'https://simplecast-1297.appspot.com/frame/nautilus/frame.jpeg?v=' +
           lastFrameQuery.getTime();
       }
 
       function screen() {
         lastScreenQuery = new Date();
         var ph = new XMLHttpRequest();
-        ph.open("HEAD", "https://simplecast-1297.appspot.com/frame/previous.jpeg");
+        ph.open("HEAD", "https://simplecast-1297.appspot.com/frame/nautilus/previous.jpeg");
         ph.onreadystatechange = function() {
           if (ph.readyState == 4) {
             var newScreen = new Date(ph.getResponseHeader("Last-Modified"));
             if (newScreen.getTime() > lastScreen.getTime()) {
               document.getElementById("prev").src =
-                'https://simplecast-1297.appspot.com/frame/previous.jpeg?v=' +
+                'https://simplecast-1297.appspot.com/frame/nautilus/previous.jpeg?v=' +
                 lastScreenQuery.getTime();
               lastScreen = newScreen;
 
@@ -216,11 +216,11 @@ var b=r.host&&r.host.indexOf("@")>0?r.host.split("@"):!1;b&&(r.auth=b.shift(),r.
       <div id="log">
       </div>
     </div>
-    <img class="canvas" id="frame" src="https://simplecast-1297.appspot.com/frame/frame.jpeg"
+    <img class="canvas" id="frame" src="https://simplecast-1297.appspot.com/frame/nautilus/frame.jpeg"
          draggable="false"
          onload="imgLoaded()"
          onclick="sendMouse(event)">
-    <img class="canvas" id="prev" src="https://simplecast-1297.appspot.com/frame/previous.jpeg">
+    <img class="canvas" id="prev" src="https://simplecast-1297.appspot.com/frame/nautilus/previous.jpeg">
     <script type="text/javascript">
       proclp();
     </script>
