@@ -19,8 +19,6 @@ package io.baku.simplecast;
 import java.io.EOFException;
 import java.io.IOException;
 import java.io.ObjectInputStream;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ConcurrentMap;
 
 import javax.servlet.http.HttpServlet;
 import javax.servlet.http.HttpServletRequest;
@@ -31,31 +29,11 @@ import com.google.common.io.ByteStreams;
 public class FrameServlet extends HttpServlet {
   private static final long serialVersionUID = -1428114883956980006L;
   
-  private static final ConcurrentMap<String, Session> sessions = new ConcurrentHashMap<>();
-  
-  private static class PathInfo {
-    final String name;
-    final String variant;
-    
-    public PathInfo(final HttpServletRequest req) {
-      final String[] parts = req.getPathInfo().split("/");
-      name = parts[1];
-      variant = parts[2];
-    }
-  }
-
   @Override
-  public void doPut(final HttpServletRequest req, final HttpServletResponse resp) throws IOException {
+  protected void doPut(final HttpServletRequest req, final HttpServletResponse resp) throws IOException {
     final PathInfo p = new PathInfo(req);
     
-    Session s = sessions.get(p.name);
-    if (s == null) {
-      final Session candidate = new Session(p.name);
-      s = sessions.putIfAbsent(p.name, candidate);
-      if (s == null) {
-        s = candidate;
-      }
-    }
+    final Session s = Sessions.getOrCreate(p.name);
     
     if ("frame.jpeg".equals(p.variant)) {
       s.refresh();
@@ -78,7 +56,7 @@ public class FrameServlet extends HttpServlet {
   @Override
   protected void doHead(HttpServletRequest req, HttpServletResponse resp) throws IOException {
     final PathInfo p = new PathInfo(req);
-    final Session s = sessions.get(p.name);
+    final Session s = Sessions.get(p.name);
     
     if (s ==  null) {
       resp.sendError(HttpServletResponse.SC_NOT_FOUND);
@@ -89,9 +67,9 @@ public class FrameServlet extends HttpServlet {
   }
   
   @Override
-  public void doGet(final HttpServletRequest req, final HttpServletResponse resp) throws IOException {
+  protected void doGet(final HttpServletRequest req, final HttpServletResponse resp) throws IOException {
     final PathInfo p = new PathInfo(req);
-    final Session s = sessions.get(p.name);
+    final Session s = Sessions.get(p.name);
     
     if (s ==  null) {
       resp.sendError(HttpServletResponse.SC_NOT_FOUND);

@@ -8,8 +8,16 @@
         <servlet-name>frame</servlet-name>
         <servlet-class>io.baku.simplecast.FrameServlet</servlet-class>
     </servlet>
+    <servlet>
+        <servlet-name>command</servlet-name>
+        <servlet-class>io.baku.simplecast.CommandServlet</servlet-class>
+    </servlet>
     <servlet-mapping>
         <servlet-name>frame</servlet-name>
         <url-pattern>/frame/*</url-pattern>
+    </servlet-mapping>
+    <servlet-mapping>
+        <servlet-name>command</servlet-name>
+        <url-pattern>/command/*</url-pattern>
     </servlet-mapping>
 </web-app>
