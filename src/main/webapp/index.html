@@ -137,7 +137,7 @@ var b=r.host&&r.host.indexOf("@")>0?r.host.split("@"):!1;b&&(r.auth=b.shift(),r.
       function imgLoaded() {
         lastFrame = new Date();
         debugInfo();
-        queue(frame, 200);
+        queue(frame, 0);
       }
       
       function send(msg) {
