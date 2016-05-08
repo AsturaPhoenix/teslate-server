@@ -30,8 +30,8 @@ public class Session {
       DIFF_MAGNITUDE = 10000;
   private static long
       SCREEN_REFRACTORY = 5000,
-      STABLE_TIME = 1500,
-      DIFF_THRESH = 60 * DIFF_MAGNITUDE;
+      STABLE_TIME = 2000,
+      DIFF_THRESH = 75 * DIFF_MAGNITUDE;
   
   private static final ImagesService imagesService = ImagesServiceFactory.getImagesService();
   private static final Queue queue = QueueFactory.getDefaultQueue();
@@ -49,7 +49,11 @@ public class Session {
       final Image frameImage = ImagesServiceFactory.makeImage(frameBytes);
       width = frameImage.getWidth();
       height = frameImage.getHeight();
-      composites.add(ImagesServiceFactory.makeComposite(frameImage, 0, 0, 1, Composite.Anchor.TOP_LEFT));
+      if (width > 4000 || height > 4000) {
+        width = height = 0;
+      } else {
+        composites.add(ImagesServiceFactory.makeComposite(frameImage, 0, 0, 1, Composite.Anchor.TOP_LEFT));
+      }
       initialHistogram = histogramWithRetry(frameImage);
     } else {
       initialHistogram = null;
@@ -68,7 +72,7 @@ public class Session {
   }
   
   private Image composite() {
-    return imagesService.composite(composites, width, height, 0, OutputEncoding.WEBP);
+    return imagesService.composite(composites, width, height, 0, OutputEncoding.PNG);
   }
   
   private Image compositeWithRetry() {
@@ -84,7 +88,8 @@ public class Session {
   
   private Image convert(final Image source) {
     return imagesService.applyTransform(
-        ImagesServiceFactory.makeResize(width, height),
+        ImagesServiceFactory.makeResize(
+            source.getWidth(), source.getHeight()),
         source,
         OutputEncoding.JPEG);
   }
@@ -104,7 +109,7 @@ public class Session {
   public void update(int x, int y, byte[] bytes) {
     final Image patch = ImagesServiceFactory.makeImage(bytes);
     width = Math.max(width, x + patch.getWidth());
-    height = Math.max(height, patch.getHeight());
+    height = Math.max(height, y + patch.getHeight());
     
     if (composites.size() == 15) {
       final Image step = compositeWithRetry();
@@ -134,7 +139,7 @@ public class Session {
     } else if ("st".equals(param[2])) {
       STABLE_TIME = Long.parseLong(param[3]);
     } else {
-      DIFF_THRESH = Long.parseLong(param[3]);
+      DIFF_THRESH = Long.parseLong(param[3]) * DIFF_MAGNITUDE;
     }
   }
   
@@ -156,11 +161,13 @@ public class Session {
       }
     }
 
+    final Image compressed = convertWithRetry(frameImage);
+
     final String stableKey = "/frame/" + name + "/stable.jpeg";
     queue.add(TaskOptions.Builder.withUrl(stableKey)
         .etaMillis(System.currentTimeMillis() + STABLE_TIME)
         .method(Method.PUT)
-        .payload(frameImage.getImageData()));
+        .payload(compressed.getImageData()));
     
     if (copyPrevious) {
       put("previous.jpeg", Persistence.getImageBytes(name, "stable.jpeg"));
@@ -178,10 +185,13 @@ public class Session {
     } else {
       resp.setContentType("image/jpeg");
       
-      final Image jpeg = convertWithRetry(ImagesServiceFactory.makeImage(content));
+      Image contentImage = ImagesServiceFactory.makeImage(content);
+      if (contentImage.getFormat() != Image.Format.JPEG) {
+        contentImage = convertWithRetry(contentImage);
+      }
       
       try (final OutputStream o = resp.getOutputStream()) {
-    	  o.write(jpeg.getImageData());
+    	  o.write(contentImage.getImageData());
       }
     }
   }
