@@ -2,12 +2,14 @@ package io.baku.simplecast;
 
 import java.io.IOException;
 import java.io.OutputStream;
+import java.nio.ByteBuffer;
 import java.util.ArrayList;
-import java.util.Arrays;
+import java.util.concurrent.Future;
 
 import javax.servlet.http.HttpServletResponse;
 
 import com.google.api.client.repackaged.com.google.common.base.Throwables;
+import com.google.appengine.api.datastore.Key;
 import com.google.appengine.api.images.Composite;
 import com.google.appengine.api.images.Image;
 import com.google.appengine.api.images.ImagesService;
@@ -31,32 +33,42 @@ public class Session {
   private static long
       SCREEN_REFRACTORY = 5000,
       STABLE_TIME = 2000,
-      DIFF_THRESH = 75 * DIFF_MAGNITUDE;
+      DIFF_THRESH = 100 * DIFF_MAGNITUDE;
   
   private static final ImagesService imagesService = ImagesServiceFactory.getImagesService();
   private static final Queue queue = QueueFactory.getDefaultQueue();
   
   private final String name;
   
+  private final Object compositeMutex = new Object();
   private final ArrayList<Composite> composites = new ArrayList<>();
   private int[][] initialHistogram;
   private int width, height;
   
+  private boolean validateDimensions(final int w, final int h) {
+    return w <= 4000 && w > 0 && h <= 4000 && h > 0;
+  }
+  
   public void refresh() throws IOException {
-    composites.clear();
     final byte[] frameBytes = Persistence.getImageBytes(name, "frame.jpeg");
-    if (frameBytes != null) {
-      final Image frameImage = ImagesServiceFactory.makeImage(frameBytes);
-      width = frameImage.getWidth();
-      height = frameImage.getHeight();
-      if (width > 4000 || height > 4000) {
-        width = height = 0;
+    synchronized (compositeMutex) {
+      composites.clear();
+      if (frameBytes != null) {
+        final Image frameImage = ImagesServiceFactory.makeImage(frameBytes);
+        width = frameImage.getWidth();
+        height = frameImage.getHeight();
+        if (validateDimensions(width, height)) {
+          composites.add(ImagesServiceFactory.makeComposite(frameImage, 0, 0, 1, Composite.Anchor.TOP_LEFT));
+          initialHistogram = histogramWithRetry(frameImage);
+        } else {
+          log.warning("Previous frame is corrupt: " + width + " x " + height);
+          width = height = 0;
+          initialHistogram = null;
+        }
       } else {
-        composites.add(ImagesServiceFactory.makeComposite(frameImage, 0, 0, 1, Composite.Anchor.TOP_LEFT));
+        width = height = 0;
+        initialHistogram = null;
       }
-      initialHistogram = histogramWithRetry(frameImage);
-    } else {
-      initialHistogram = null;
     }
   }
   
@@ -108,15 +120,26 @@ public class Session {
   
   public void update(int x, int y, byte[] bytes) {
     final Image patch = ImagesServiceFactory.makeImage(bytes);
-    width = Math.max(width, x + patch.getWidth());
-    height = Math.max(height, y + patch.getHeight());
+    final int
+      cwidth = Math.max(width, x + patch.getWidth()),
+      cheight = Math.max(height, y + patch.getHeight());
     
-    if (composites.size() == 15) {
-      final Image step = compositeWithRetry();
-      composites.clear();
-      composites.add(ImagesServiceFactory.makeComposite(step, 0, 0, 1, Composite.Anchor.TOP_LEFT));
+    if (validateDimensions(cwidth, cheight)) {
+      synchronized (compositeMutex) {
+        width = cwidth;
+        height = cheight;
+        
+        if (composites.size() == 15) {
+          final Image step = compositeWithRetry();
+          composites.clear();
+          composites.add(ImagesServiceFactory.makeComposite(step, 0, 0, 1, Composite.Anchor.TOP_LEFT));
+        }
+        composites.add(ImagesServiceFactory.makeComposite(patch, x, y, 1, Composite.Anchor.TOP_LEFT));
+      }
+    } else {
+      log.warning("Invalid patch " + patch.getWidth() + " x " + patch.getHeight() +
+          " at " + x + ", " + y);
     }
-    composites.add(ImagesServiceFactory.makeComposite(patch, x, y, 1, Composite.Anchor.TOP_LEFT));
   }
   
   private long diff(int[][] a, int[][] b) {
@@ -144,15 +167,22 @@ public class Session {
   }
   
   public void commit() throws IOException {
-    final Image frameImage = compositeWithRetry();
+    final Image frameImage;
+    synchronized (compositeMutex) {
+       frameImage = compositeWithRetry();
+    }
     put("frame.jpeg", frameImage.getImageData());
+    final Future<Key> ephemeral = Persistence.startPutEphemeral(frameImage.getImageData());
     
     final boolean copyPrevious;
     final int[][] frameHistogram = histogramWithRetry(frameImage);
     if (initialHistogram == null) {
       copyPrevious = true;
     } else {
-      long diff = diff(initialHistogram, frameHistogram);
+      final long diff;
+      synchronized (compositeMutex) {
+        diff = diff(initialHistogram, frameHistogram);
+      }
       
       if (diff > DIFF_THRESH) {
         copyPrevious = System.currentTimeMillis() - getLastModified("previous.jpeg") > SCREEN_REFRACTORY;
@@ -161,21 +191,27 @@ public class Session {
       }
     }
 
-    final Image compressed = convertWithRetry(frameImage);
-
+    final ByteBuffer idBytes = ByteBuffer.allocate(Long.BYTES);
+    idBytes.putLong(Persistence.finishPutEphemeral(ephemeral, frameImage.getImageData()));
     final String stableKey = "/frame/" + name + "/stable.jpeg";
     queue.add(TaskOptions.Builder.withUrl(stableKey)
         .etaMillis(System.currentTimeMillis() + STABLE_TIME)
-        .method(Method.PUT)
-        .payload(compressed.getImageData()));
+        .method(Method.POST)
+        .payload(idBytes.array()));
     
     if (copyPrevious) {
+      log.info("Copying previous");
       put("previous.jpeg", Persistence.getImageBytes(name, "stable.jpeg"));
     }
   }
   
   public void put(final String variant, final byte[] payload) {
     Persistence.putAuditedImage(name, variant, payload);
+  }
+  
+  public void dereference(final String variant, final long id) {
+    log.info("Dereferencing " + id);
+    Persistence.putImageBytes(name, variant, Persistence.removeEphemeral(id));
   }
   
   public void get(final String variant, final HttpServletResponse resp) throws IOException {
