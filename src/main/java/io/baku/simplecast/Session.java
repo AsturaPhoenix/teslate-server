@@ -1,29 +1,28 @@
 package io.baku.simplecast;
 
 import java.io.IOException;
+import java.io.ObjectInputStream;
 import java.io.OutputStream;
-import java.nio.ByteBuffer;
 import java.util.ArrayList;
-import java.util.concurrent.Future;
+import java.util.UUID;
 
 import javax.servlet.http.HttpServletResponse;
 
 import com.google.api.client.repackaged.com.google.common.base.Throwables;
-import com.google.appengine.api.datastore.Key;
+import com.google.appengine.api.datastore.EntityNotFoundException;
 import com.google.appengine.api.images.Composite;
 import com.google.appengine.api.images.Image;
 import com.google.appengine.api.images.ImagesService;
 import com.google.appengine.api.images.ImagesService.OutputEncoding;
-
-import lombok.RequiredArgsConstructor;
-import lombok.extern.java.Log;
-
 import com.google.appengine.api.images.ImagesServiceFactory;
 import com.google.appengine.api.images.ImagesServiceFailureException;
 import com.google.appengine.api.taskqueue.Queue;
 import com.google.appengine.api.taskqueue.QueueFactory;
 import com.google.appengine.api.taskqueue.TaskOptions;
 import com.google.appengine.api.taskqueue.TaskOptions.Method;
+
+import lombok.RequiredArgsConstructor;
+import lombok.extern.java.Log;
 
 @Log
 @RequiredArgsConstructor
@@ -171,8 +170,9 @@ public class Session {
     synchronized (compositeMutex) {
        frameImage = compositeWithRetry();
     }
-    put("frame.jpeg", frameImage.getImageData());
-    final Future<Key> ephemeral = Persistence.startPutEphemeral(frameImage.getImageData());
+    
+    final UUID frameUuid = Persistence.saveImage(frameImage.getImageData());
+    Persistence.setRef(name, "frame.jpeg", frameUuid, true);
     
     final boolean copyPrevious;
     final int[][] frameHistogram = histogramWithRetry(frameImage);
@@ -191,27 +191,30 @@ public class Session {
       }
     }
 
-    final ByteBuffer idBytes = ByteBuffer.allocate(Long.BYTES);
-    idBytes.putLong(Persistence.finishPutEphemeral(ephemeral, frameImage.getImageData()));
     final String stableKey = "/frame/" + name + "/stable.jpeg";
     queue.add(TaskOptions.Builder.withUrl(stableKey)
         .etaMillis(System.currentTimeMillis() + STABLE_TIME)
-        .method(Method.POST)
-        .payload(idBytes.array()));
+        .method(Method.PUT)
+        .payload(Persistence.uuidToBytes(frameUuid)));
     
     if (copyPrevious) {
-      log.info("Copying previous");
-      put("previous.jpeg", Persistence.getImageBytes(name, "stable.jpeg"));
+      try {
+        final UUID stableUuid = Persistence.getRef(name, "stable.jpeg");
+        log.info("Copying previous");
+        Persistence.setRef(name, "previous.jpeg", stableUuid, true);
+      } catch (final EntityNotFoundException e) {
+        log.info("No stable.jpeg reference found");
+      }
     }
   }
   
-  public void put(final String variant, final byte[] payload) {
-    Persistence.putAuditedImage(name, variant, payload);
+  public void put(final String variant, final UUID uuid) throws IOException {
+    Persistence.setRef(name, variant, uuid, false);
   }
   
-  public void dereference(final String variant, final long id) {
-    log.info("Dereferencing " + id);
-    Persistence.putImageBytes(name, variant, Persistence.removeEphemeral(id));
+  public void handleDatastoreTask(final String variant, final ObjectInputStream oin)
+      throws ClassNotFoundException, IOException {
+    Persistence.handleDatastoreTask(name, variant, oin);
   }
   
   public void get(final String variant, final HttpServletResponse resp) throws IOException {

@@ -19,7 +19,6 @@ package io.baku.simplecast;
 import java.io.EOFException;
 import java.io.IOException;
 import java.io.ObjectInputStream;
-import java.nio.ByteBuffer;
 
 import javax.servlet.http.HttpServlet;
 import javax.servlet.http.HttpServletRequest;
@@ -49,19 +48,25 @@ public class FrameServlet extends HttpServlet {
         s.commit();
       }
     } else {
-      s.put(p.variant, ByteStreams.toByteArray(req.getInputStream()));
+      s.put(p.variant, Persistence.bytesToUuid(ByteStreams.toByteArray(req.getInputStream())));
     }
   }
   
   @Override
   protected void doPost(final HttpServletRequest req, final HttpServletResponse resp) throws IOException {
-    final PathInfo p = new PathInfo(req);
-    final Session s = Sessions.getOrCreate(p.name);
-    
-    final ByteBuffer bytes = ByteBuffer.wrap(ByteStreams.toByteArray(req.getInputStream()));
-    s.dereference(p.variant, bytes.getLong());
+    try (final ObjectInputStream oin = new ObjectInputStream(req.getInputStream())) {
+      if (req.getPathInfo() == null || req.getPathInfo().length() <= 1) {
+        Persistence.handleDatastoreTask(oin);
+      } else {
+        final PathInfo p = new PathInfo(req);
+        final Session s = Sessions.getOrCreate(p.name);
+        
+        s.handleDatastoreTask(p.variant, oin);
+      }
+    } catch (final ClassNotFoundException e) {
+      throw new RuntimeException(e);
+    }
   }
-  
   
   @Override
   protected void doHead(HttpServletRequest req, HttpServletResponse resp) throws IOException {
