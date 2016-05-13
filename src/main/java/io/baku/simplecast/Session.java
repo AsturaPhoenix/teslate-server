@@ -21,6 +21,7 @@ import com.google.appengine.api.taskqueue.QueueFactory;
 import com.google.appengine.api.taskqueue.TaskOptions;
 import com.google.appengine.api.taskqueue.TaskOptions.Method;
 
+import io.baku.simplecast.Persistence.RefEntity;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.java.Log;
 
@@ -32,7 +33,7 @@ public class Session {
   private static long
       SCREEN_REFRACTORY = 5000,
       STABLE_TIME = 2000,
-      DIFF_THRESH = 100 * DIFF_MAGNITUDE;
+      DIFF_THRESH = 60 * DIFF_MAGNITUDE;
   
   private static final ImagesService imagesService = ImagesServiceFactory.getImagesService();
   private static final Queue queue = QueueFactory.getDefaultQueue();
@@ -43,6 +44,7 @@ public class Session {
   private final ArrayList<Composite> composites = new ArrayList<>();
   private int[][] initialHistogram;
   private int width, height;
+  private int patchArea; 
   
   private boolean validateDimensions(final int w, final int h) {
     return w <= 4000 && w > 0 && h <= 4000 && h > 0;
@@ -68,6 +70,7 @@ public class Session {
         width = height = 0;
         initialHistogram = null;
       }
+      patchArea = 0;
     }
   }
   
@@ -128,6 +131,8 @@ public class Session {
         width = cwidth;
         height = cheight;
         
+        patchArea += patch.getWidth() * patch.getHeight();
+        
         if (composites.size() == 15) {
           final Image step = compositeWithRetry();
           composites.clear();
@@ -172,12 +177,15 @@ public class Session {
     }
     
     final UUID frameUuid = Persistence.saveImage(frameImage.getImageData());
-    Persistence.setRef(name, "frame.jpeg", frameUuid, true);
+    Persistence.setRef(name, "frame.jpeg", new RefEntity(frameUuid, UUID.randomUUID()), true);
     
     final boolean copyPrevious;
     final int[][] frameHistogram = histogramWithRetry(frameImage);
     if (initialHistogram == null) {
       copyPrevious = true;
+    } else if (patchArea == 0 || patchArea < width * height / 4) {
+      copyPrevious = false;
+      log.info("Not diffing; patch area " + patchArea * 100 / width / height + "%");
     } else {
       final long diff;
       synchronized (compositeMutex) {
@@ -201,7 +209,7 @@ public class Session {
       try {
         final UUID stableUuid = Persistence.getRef(name, "stable.jpeg");
         log.info("Copying previous");
-        Persistence.setRef(name, "previous.jpeg", stableUuid, true);
+        Persistence.setRef(name, "previous.jpeg", new RefEntity(stableUuid, UUID.randomUUID()), true);
       } catch (final EntityNotFoundException e) {
         log.info("No stable.jpeg reference found");
       }
@@ -209,7 +217,7 @@ public class Session {
   }
   
   public void put(final String variant, final UUID uuid) throws IOException {
-    Persistence.setRef(name, variant, uuid, false);
+    Persistence.setRef(name, variant, new RefEntity(uuid, uuid), false);
   }
   
   public void handleDatastoreTask(final String variant, final ObjectInputStream oin)

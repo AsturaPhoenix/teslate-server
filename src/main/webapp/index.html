@@ -181,8 +181,11 @@
          draggable="false"
          onload="imgLoaded()"
          onclick="sendMouse(event)"
+         onmousedown="debug('md')"
          onmousemove="debug('mm')"
          ondrag="debug('d')"
+         onscroll="debug('s')"
+         ontouchstart="debug('ts')"
          ontouchmove="debug('t')">
     <img class="canvas" id="prev" src="https://simplecast-1297.appspot.com/frame/nautilus/previous.jpeg">
     <script type="text/javascript">
