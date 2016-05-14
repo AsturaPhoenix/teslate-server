@@ -33,7 +33,7 @@ public class Session {
   private static long
       SCREEN_REFRACTORY = 5000,
       STABLE_TIME = 2000,
-      DIFF_THRESH = 60 * DIFF_MAGNITUDE;
+      DIFF_THRESH = 80 * DIFF_MAGNITUDE;
   
   private static final ImagesService imagesService = ImagesServiceFactory.getImagesService();
   private static final Queue queue = QueueFactory.getDefaultQueue();

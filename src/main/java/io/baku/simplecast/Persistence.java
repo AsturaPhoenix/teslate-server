@@ -249,9 +249,10 @@ public class Persistence {
     }
     
     final Key frameKey = createKey(name, variant);
-    final Entity frame = new Entity(frameKey);
-    frame.setUnindexedProperty(BYTES_PROP, new Blob(uuidToBytes(task.newRef.ref)));
-    datastore.put(frame);
+    final Entity frameRef = new Entity(frameKey);
+    frameRef.setUnindexedProperty(BYTES_PROP, new Blob(uuidToBytes(task.newRef.ref)));
+    frameRef.setUnindexedProperty(REF_COUNTER_PROP, new Blob(uuidToBytes(task.newRef.refCounter)));
+    datastore.put(frameRef);
     log.info("Changing " + variant + " ref from " +
         task.prevRef + " to " + task.newRef + " in datastore");
     
