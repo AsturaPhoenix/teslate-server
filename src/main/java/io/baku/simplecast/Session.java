@@ -21,7 +21,6 @@ import com.google.appengine.api.taskqueue.QueueFactory;
 import com.google.appengine.api.taskqueue.TaskOptions;
 import com.google.appengine.api.taskqueue.TaskOptions.Method;
 
-import io.baku.simplecast.Persistence.RefEntity;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.java.Log;
 
@@ -32,8 +31,9 @@ public class Session {
       DIFF_MAGNITUDE = 10000;
   private static long
       SCREEN_REFRACTORY = 5000,
+      STABLE_UPDATE = 2000,
       STABLE_TIME = 2000,
-      DIFF_THRESH = 80 * DIFF_MAGNITUDE;
+      DIFF_THRESH = 70 * DIFF_MAGNITUDE;
   
   private static final ImagesService imagesService = ImagesServiceFactory.getImagesService();
   private static final Queue queue = QueueFactory.getDefaultQueue();
@@ -146,7 +146,7 @@ public class Session {
     }
   }
   
-  private long diff(int[][] a, int[][] b) {
+  private static long diff(int[][] a, int[][] b) {
     long diff = 0;
     for (int i = 0; i < a.length; i++) {
       for (int j = 0; j < a[i].length; j++) {
@@ -176,21 +176,35 @@ public class Session {
        frameImage = compositeWithRetry();
     }
     
-    final UUID frameUuid = Persistence.saveImage(frameImage.getImageData());
-    Persistence.setRef(name, "frame.jpeg", new RefEntity(frameUuid, UUID.randomUUID()), true);
+    final Long frameLastPersistedDurably = Persistence.getCachedImageLastPersistedDurably(name, "frame.jpeg");
+    
+    if (frameLastPersistedDurably == null || System.currentTimeMillis() >= frameLastPersistedDurably + STABLE_UPDATE) {
+      final UUID frameUuid = Persistence.saveImage(name, frameImage.getImageData());
+      Persistence.setRef(name, "frame.jpeg", frameUuid, true);
+
+      final String stableKey = "/frame/" + name + "/stable.jpeg";
+      queue.add(TaskOptions.Builder.withUrl(stableKey)
+          .etaMillis(System.currentTimeMillis() + STABLE_TIME)
+          .method(Method.PUT)
+          .payload(Persistence.uuidToBytes(frameUuid)));
+    } else {
+      Persistence.setDirect(name, "frame.jpeg", frameImage.getImageData());
+    }
     
     final boolean copyPrevious;
-    final int[][] frameHistogram = histogramWithRetry(frameImage);
-    if (initialHistogram == null) {
-      copyPrevious = true;
-    } else if (patchArea == 0 || patchArea < width * height / 4) {
+    if (initialHistogram == null || patchArea == 0 || patchArea < width * height / 4) {
       copyPrevious = false;
       log.info("Not diffing; patch area " + patchArea * 100 / width / height + "%");
     } else {
+      final int[][] frameHistogram = histogramWithRetry(frameImage);
+      
       final long diff;
+      final int[][] initialHistogram;
       synchronized (compositeMutex) {
-        diff = diff(initialHistogram, frameHistogram);
+        initialHistogram = this.initialHistogram;
       }
+      
+      diff = diff(initialHistogram, frameHistogram);
       
       if (diff > DIFF_THRESH) {
         copyPrevious = System.currentTimeMillis() - getLastModified("previous.jpeg") > SCREEN_REFRACTORY;
@@ -199,17 +213,11 @@ public class Session {
       }
     }
 
-    final String stableKey = "/frame/" + name + "/stable.jpeg";
-    queue.add(TaskOptions.Builder.withUrl(stableKey)
-        .etaMillis(System.currentTimeMillis() + STABLE_TIME)
-        .method(Method.PUT)
-        .payload(Persistence.uuidToBytes(frameUuid)));
-    
     if (copyPrevious) {
       try {
         final UUID stableUuid = Persistence.getRef(name, "stable.jpeg");
         log.info("Copying previous");
-        Persistence.setRef(name, "previous.jpeg", new RefEntity(stableUuid, UUID.randomUUID()), true);
+        Persistence.setRef(name, "previous.jpeg", stableUuid, true);
       } catch (final EntityNotFoundException e) {
         log.info("No stable.jpeg reference found");
       }
@@ -217,7 +225,7 @@ public class Session {
   }
   
   public void put(final String variant, final UUID uuid) throws IOException {
-    Persistence.setRef(name, variant, new RefEntity(uuid, uuid), false);
+    Persistence.setRef(name, variant, uuid, false);
   }
   
   public void handleDatastoreTask(final String variant, final ObjectInputStream oin)

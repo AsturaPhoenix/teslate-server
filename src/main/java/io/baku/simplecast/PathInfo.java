@@ -9,6 +9,6 @@ public class PathInfo {
   public PathInfo(final HttpServletRequest req) {
     final String[] parts = req.getPathInfo().split("/");
     name = parts[1];
-    variant = parts[2];
+    variant = parts.length > 2 ? parts[2] : null;
   }
 }

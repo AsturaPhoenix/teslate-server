@@ -6,6 +6,7 @@ import java.io.ObjectInputStream;
 import java.io.ObjectOutputStream;
 import java.io.Serializable;
 import java.nio.ByteBuffer;
+import java.util.ConcurrentModificationException;
 import java.util.UUID;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Future;
@@ -21,7 +22,7 @@ import com.google.appengine.api.datastore.Entity;
 import com.google.appengine.api.datastore.EntityNotFoundException;
 import com.google.appengine.api.datastore.Key;
 import com.google.appengine.api.datastore.KeyFactory;
-import com.google.appengine.api.datastore.Query;
+import com.google.appengine.api.datastore.Transaction;
 import com.google.appengine.api.memcache.ConsistentLogAndContinueErrorHandler;
 import com.google.appengine.api.memcache.MemcacheService;
 import com.google.appengine.api.memcache.MemcacheService.IdentifiableValue;
@@ -30,6 +31,7 @@ import com.google.appengine.api.taskqueue.Queue;
 import com.google.appengine.api.taskqueue.QueueFactory;
 import com.google.appengine.api.taskqueue.TaskOptions;
 import com.google.appengine.api.taskqueue.TaskOptions.Method;
+import com.google.common.util.concurrent.Futures;
 import com.google.common.util.concurrent.Uninterruptibles;
 
 import lombok.RequiredArgsConstructor;
@@ -40,7 +42,7 @@ import lombok.extern.java.Log;
 @UtilityClass
 public class Persistence {
   private static final int
-    REF_STICKINESS = 7000,
+    REF_STICKINESS = 10000,
     FRAME_POLL_PERIOD = 50,
     FRAME_POLL_TIMEOUT = 2500,
     COMMAND_POLL_PERIOD = 50,
@@ -50,9 +52,8 @@ public class Persistence {
     SESSION_KIND = "Session",
     FRAME_KIND = "Frame",
     FRAME_REF_KIND = "FrameRef",
-    REF_COUNTER_KIND = "RefCounter",
     BYTES_PROP = "bytes",
-    REF_COUNTER_PROP = "refCounter",
+    TIMESTAMP_PROP = "timestamp",
     METADATA_KIND = "Metadata",
     LAST_ACCESSED_KEY = "lastAccessed",
     LAST_MODIFIED_KEY = "lastModified",
@@ -105,9 +106,20 @@ public class Persistence {
   }
   
   public static byte[] getImageBytes(final String name, final String variant) {
+    final Object cached = cache.get(name + "/" + variant);
+    if (cached instanceof byte[]) {
+      log.info("Direct image retrieved from " + name + "/" + variant);
+      return (byte[]) cached;
+    } else if (cached instanceof UUID) {
+      log.info("Image ref at " + name + "/" + variant + ": " + cached);
+      return getImageBytes((UUID)cached);
+    }
+    
+    log.info("Cache miss (" + name + "/" + variant + ")");
+    
     final UUID uuid;
     try {
-      uuid = getRef(name, variant);
+      uuid = getDatastoreRef(name, variant);
     } catch (final EntityNotFoundException e) {
       log.warning("Session " + name + ": no frame for " + variant + " in datastore.");
       return null;
@@ -115,26 +127,17 @@ public class Persistence {
     return getImageBytes(uuid);
   }
   
-  @RequiredArgsConstructor
-  public static class RefEntity implements Serializable {
-    private static final long serialVersionUID = -7865697301362093803L;
-    public final UUID ref;
-    public final UUID refCounter;
-    
-    @Override
-    public String toString() {
-      return ref + " (ref instance " + refCounter + ")";
-    }
-  }
-  
   public static UUID getRef(final String name, final String variant) throws EntityNotFoundException {
-    final RefEntity ref = (RefEntity)cache.get(name + "/" + variant);
+    final UUID ref = (UUID)cache.get(name + "/" + variant);
     if (ref != null) {
-      return ref.ref;
+      return ref;
     }
     
     log.info("Cache miss (" + name + "/" + variant + ")");
-    
+    return getDatastoreRef(name, variant);
+  }
+  
+  private static UUID getDatastoreRef(final String name, final String variant) throws EntityNotFoundException {
     final Entity raw = finishGet(datastore.get(createKey(name, variant)));
     return propToUuid(raw.getProperty(BYTES_PROP));
   }
@@ -155,49 +158,87 @@ public class Persistence {
   private static class SetDatastoreRefTask implements Serializable {
     private static final long serialVersionUID = 6753130426063123693L;
     
-    public final RefEntity prevRef, newRef;
-    public final boolean incrementNew;
+    public final UUID ref;
     public final @Nullable Long lastModified;
   }
   
-  public static void setRef(final String name, final String variant, final RefEntity refEntity,
+  public static void setDirect(final String name, final String variant, final byte[] data) {
+    final String nvKey = name + "/" + variant;
+    cache.put(nvKey, data);
+    log.info("Setting image for " + nvKey + " directly");
+    cache.put(nvKey + "/last-modified", System.currentTimeMillis());
+  }
+  
+  public static void setRef(final String name, final String variant, final UUID ref,
       final boolean frontEnd) throws IOException {
     final String nvKey = name + "/" + variant;
-    RefEntity prev;
-    final IdentifiableValue prevFromCache = cache.getIdentifiable(nvKey);
-    if (prevFromCache == null) {
-      log.info("Cache miss (" + nvKey + ")");
-      
-      final Future<Entity> prevFromDatastore = datastore.get(createKey(name, variant));
-      cache.put(nvKey, refEntity);
-      try {
-        final Entity raw = finishGet(prevFromDatastore);
-        prev = new RefEntity(propToUuid(raw.getProperty(BYTES_PROP)),
-            propToUuid(raw.getProperty(REF_COUNTER_PROP)));
-      } catch (final EntityNotFoundException e) {
-        prev = null;
-      }
-    } else {
-      if (!cache.putIfUntouched(nvKey, prevFromCache, refEntity)) {
-        setRef(name, variant, refEntity, frontEnd);
-        return;
-      }
-      prev = (RefEntity)prevFromCache.getValue();
-    }
-    log.info("Changing " + variant + " ref from " + prev + " to " + refEntity + " in cache");
+    cache.put(nvKey, ref);
+    log.info("Changing " + nvKey + " ref to " + ref + " in cache");
     
     if (frontEnd) {
       final long lastModified = System.currentTimeMillis();
-      cache.put(name + "/" + variant + "/last-modified", lastModified);
-      scheduleDatastoreTask(name, variant,
-          new SetDatastoreRefTask(prev, refEntity, true, lastModified));
+      cache.put(nvKey + "/last-modified", lastModified);
+      cache.put(nvKey + "/last-persisted-durably", lastModified);
+      scheduleDatastoreTask(name, variant, new SetDatastoreRefTask(ref, lastModified));
     } else {
-      setDatastoreRef(name, variant,
-          new SetDatastoreRefTask(prev, refEntity, false, null));
+      setDatastoreRef(name, variant, new SetDatastoreRefTask(ref, null));
     }
   }
   
-  private void scheduleDatastoreTask(final String datastoreTaskUrl, final Serializable task) 
+  private static void setDatastoreRef(final String name, final String variant,
+      final SetDatastoreRefTask task) {
+    
+    final Key frameKey = createKey(name, variant);
+    UUID prev = null;
+
+    boolean committed = false;
+    while (!committed) {
+      final Transaction tx = Futures.getUnchecked(datastore.beginTransaction());
+      try {
+        if ("previous.jpeg".equals(variant)) {
+          try {
+            prev = propToUuid(finishGet(datastore.get(tx, frameKey)).getProperty(BYTES_PROP));
+            log.info("Previous ref for previous.jpeg: " + prev);
+          } catch (final EntityNotFoundException e) {
+            prev = null;
+          }
+        } else {
+          prev = null;
+        }
+        
+        final Entity frameRef = new Entity(frameKey);
+        frameRef.setUnindexedProperty(BYTES_PROP, new Blob(uuidToBytes(task.ref)));
+        Futures.getUnchecked(datastore.put(tx, frameRef));
+        
+        if (task.lastModified != null) {
+          final Entity lastModifiedEntity = new Entity(frameKey
+              .getChild(METADATA_KIND, LAST_MODIFIED_KEY));
+          lastModifiedEntity.setUnindexedProperty(VALUE_PROP, task.lastModified);
+          Futures.getUnchecked(datastore.put(tx, lastModifiedEntity));
+        }
+        
+        tx.commit();
+        committed = true;
+      } catch (final ConcurrentModificationException e) {
+        log.info("Retrying due to concurrent modification: " + Throwables.getStackTraceAsString(e));
+      } finally {
+        if (tx.isActive()) {
+          tx.rollback();
+        }
+      }
+    }
+    
+    log.info("Changed " + variant + " ref to " + task.ref + " in datastore");
+      
+    if (prev != null) {
+      // evict
+      cache.delete(prev);
+      datastore.delete(createKey(prev));
+      log.info(prev + " evicted from cache and datastore");
+    }
+  }
+  
+  private void scheduleDatastoreTaskAt(final String datastoreTaskUrl, final Serializable task) 
       throws IOException {
     final ByteArrayOutputStream payload = new ByteArrayOutputStream();
     try (final ObjectOutputStream oout = new ObjectOutputStream(payload)) {
@@ -210,11 +251,11 @@ public class Persistence {
   
   private void scheduleDatastoreTask(final String name, final String variant, final Serializable task) 
       throws IOException {
-    scheduleDatastoreTask("/frame/" + name + "/" + variant, task);
+    scheduleDatastoreTaskAt("/frame/" + name + "/" + variant, task);
   }
   
-  private void scheduleDatastoreTask(final Serializable task) throws IOException {
-    scheduleDatastoreTask("/frame", task);
+  private void scheduleDatastoreTask(final String name, final Serializable task) throws IOException {
+    scheduleDatastoreTaskAt("/frame/" + name, task);
   }
   
   public static void handleDatastoreTask(final String name, final String variant,
@@ -226,71 +267,14 @@ public class Persistence {
     } else if (task instanceof SetDatastoreLastAccessedTask) {
       setDatastoreLastAccessed(name, variant, (SetDatastoreLastAccessedTask)task);
     } else if (task instanceof SaveDatastoreImageTask) {
-      saveDatastoreImage((SaveDatastoreImageTask)task);
+      saveDatastoreImage(name, (SaveDatastoreImageTask)task);
     }
   }
   
-  public static void handleDatastoreTask(final ObjectInputStream oin)
+  public static void handleDatastoreTask(final String name, final ObjectInputStream oin)
       throws ClassNotFoundException, IOException {
     final Object task = oin.readObject();
-    saveDatastoreImage((SaveDatastoreImageTask)task);
-  }
-  
-  private static Key createRefCounterKey(final RefEntity refEntity) {
-    return createKey(refEntity.ref).getChild(REF_COUNTER_KIND, refEntity.refCounter.toString());
-  }
-  
-  private static void setDatastoreRef(final String name, final String variant,
-      final SetDatastoreRefTask task) {
-    if (task.incrementNew) {
-      final Entity newRcEntity = new Entity(createRefCounterKey(task.newRef));
-      datastore.put(newRcEntity);
-      log.info(task.newRef.ref + " refcount incremented in datastore (counter " + task.newRef.refCounter + ")");
-    }
-    
-    final Key frameKey = createKey(name, variant);
-    final Entity frameRef = new Entity(frameKey);
-    frameRef.setUnindexedProperty(BYTES_PROP, new Blob(uuidToBytes(task.newRef.ref)));
-    frameRef.setUnindexedProperty(REF_COUNTER_PROP, new Blob(uuidToBytes(task.newRef.refCounter)));
-    datastore.put(frameRef);
-    log.info("Changing " + variant + " ref from " +
-        task.prevRef + " to " + task.newRef + " in datastore");
-    
-    if (task.lastModified != null) {
-      final Entity lastModifiedEntity = new Entity(frameKey
-          .getChild(METADATA_KIND, LAST_MODIFIED_KEY));
-      lastModifiedEntity.setUnindexedProperty(VALUE_PROP, task.lastModified);
-      datastore.put(lastModifiedEntity);
-    }
-    
-    if (task.prevRef != null) {
-      try {
-        // There's a chance the ref is in the middle of being passed around. To deal with this without locking,
-        // hold the ref for a time. This also covers the edge case where the increment is severely delayed.
-        Thread.sleep(REF_STICKINESS);
-      } catch (final InterruptedException e) {
-        log.warning(Throwables.getStackTraceAsString(e));
-      }
-      
-      final Key prevCounterKey = createRefCounterKey(task.prevRef);
-      // decrement
-      try {
-        datastore.delete(prevCounterKey).get();
-        log.info(task.prevRef.ref + " refcount decremented in datastore (counter " + task.prevRef.refCounter + ")");
-      } catch (InterruptedException | ExecutionException e) {
-        log.warning(Throwables.getStackTraceAsString(e));
-      }
-      
-      if (!datastore.prepare(new Query(REF_COUNTER_KIND)
-          .setAncestor(prevCounterKey.getParent())
-          .setKeysOnly())
-          .asIterator().hasNext()) {
-        // evict
-        cache.delete(task.prevRef.ref);
-        datastore.delete(prevCounterKey.getParent());
-        log.info(task.prevRef.ref + " evicted from cache and datastore");
-      }
-    }
+    saveDatastoreImage(name, (SaveDatastoreImageTask)task);
   }
   
   @RequiredArgsConstructor
@@ -306,24 +290,18 @@ public class Persistence {
   
   public static byte[] awaitAuditedImageBytes(final String name, final String variant)
       throws IOException {
+    // Use 0 rather than Long.MIN_VALUE to ensure that we can subtract sanely.
+    long lastAccessed = 0;
     //Poll for changes because memcache doesn't expose distributed events
-    final Key lastAccessedKey = createLastAccessedKey(name, variant);
-    
     for (int i = 0; i < FRAME_POLL_TIMEOUT / FRAME_POLL_PERIOD; i++) {
-      Long lastAccessed = getCachedImageLastAccessed(name, variant);
+      Long cachedLastAccessed = getCachedImageLastAccessed(name, variant);
       
-      if (lastAccessed == null) {
+      if (cachedLastAccessed == null) {
         log.info("Cache miss (" + name + "/" + variant + "/last-accessed)");
-        try {
-          lastAccessed = (Long)finishGet(datastore.get(lastAccessedKey)).getProperty(VALUE_PROP);
-        } catch (final EntityNotFoundException e) {
-          // Use 0 rather than Long.MIN_VALUE to ensure that we can subtract sanely.
-          lastAccessed = 0L;
-        }
+      } else {
+        lastAccessed = cachedLastAccessed;
       }
       
-      // While this effectively throttles us at 1000 fps, the alternative of >= would immediately unblock the null case
-      // unless we initialized that with a special lastAccessed = lastModified + 1.
       if (getImageLastModified(name,  variant) > lastAccessed) {
         break;
       }
@@ -336,11 +314,7 @@ public class Persistence {
       }
     }
     
-    long lastAccessed = System.currentTimeMillis();
-    cache.put(name + "/" + variant + "/last-accessed", lastAccessed);
-    
-    scheduleDatastoreTask(name, variant, new SetDatastoreLastAccessedTask(lastAccessed));
-    
+    cache.put(name + "/" + variant + "/last-accessed", System.currentTimeMillis());
     return getImageBytes(name, variant);
   }
   
@@ -355,33 +329,50 @@ public class Persistence {
   private static class SaveDatastoreImageTask implements Serializable {
     private static final long serialVersionUID = 1551510793636566075L;
     public final UUID uuid;
+    public final long timestamp;
   }
   
-  public static UUID saveImage(final byte[] bytes) throws IOException {
+  public static UUID saveImage(final String name, final byte[] bytes) throws IOException {
     final UUID uuid = UUID.randomUUID();
     cache.put(uuid, bytes);
     log.info(uuid + " saved to cache");
     
-    scheduleDatastoreTask(new SaveDatastoreImageTask(uuid));
+    scheduleDatastoreTask(name, new SaveDatastoreImageTask(uuid, System.currentTimeMillis()));
     
     return uuid;
   }
   
-  private static void saveDatastoreImage(final SaveDatastoreImageTask task) {
+  private static void saveDatastoreImage(final String name, final SaveDatastoreImageTask task) {
     final byte[] bytes = (byte[])cache.get(task.uuid);
     if (bytes == null) {
       log.warning("Could not persist " + task.uuid + " due to cache miss");
     } else {
-      // Since we only have one back-end frame ref to prepopulate, the stable ref (which will be
-      // hard-reffed about 5 seconds after persistence), just use the image's UUID for that counter.
-      final Key rcKey = createRefCounterKey(new RefEntity(task.uuid, task.uuid));
-      datastore.put(new Entity(rcKey));
-      
-      final Entity entity = new Entity(rcKey.getParent());
+      final Entity entity = new Entity(createKey(task.uuid));
       entity.setUnindexedProperty(BYTES_PROP, new Blob(bytes));
+      entity.setIndexedProperty(TIMESTAMP_PROP, task.timestamp);
       datastore.put(entity);
       
-      log.info(task.uuid + " saved to datastore (initial counter: " + task.uuid + ")");
+      log.info(task.uuid + " saved to datastore");
+
+      try {
+        Thread.sleep(REF_STICKINESS);
+      } catch (final InterruptedException e) {
+        log.warning(Throwables.getStackTraceAsString(e));
+      }
+      
+      UUID previous;
+      try {
+        previous = getRef(name, "previous.jpeg"); 
+      } catch (final EntityNotFoundException e) {
+        previous = null;
+      }
+      if (!task.uuid.equals(previous)) {
+        cache.delete(task.uuid);
+        datastore.delete(entity.getKey());
+        log.info(task.uuid + " evicted from cache and datastore");
+      } else {
+        log.info(task.uuid + " not evicted due to ref as previous");
+      }
     }
   }
   
@@ -391,6 +382,10 @@ public class Persistence {
   
   private static Long getCachedImageLastModified(final String name, final String variant) {
     return readCachedLong(name + "/" + variant + "/last-modified");
+  }
+  
+  public static Long getCachedImageLastPersistedDurably(final String name, final String variant) {
+    return readCachedLong(name + "/" + variant + "/last-persisted-durably");
   }
   
   public static long getImageLastModified(final String name, final String variant) {
