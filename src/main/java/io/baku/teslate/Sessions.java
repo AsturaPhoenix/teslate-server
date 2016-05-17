@@ -9,10 +9,6 @@ import lombok.experimental.UtilityClass;
 public class Sessions {
   private static final ConcurrentMap<String, Session> sessions = new ConcurrentHashMap<>();
   
-  public static Session get(final String name) {
-    return sessions.get(name);
-  }
-  
   public static Session getOrCreate(final String name) {
     Session s = sessions.get(name);
     if (s == null) {

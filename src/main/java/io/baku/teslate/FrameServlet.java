@@ -70,7 +70,7 @@ public class FrameServlet extends HttpServlet {
   @Override
   protected void doHead(HttpServletRequest req, HttpServletResponse resp) throws IOException {
     final PathInfo p = new PathInfo(req);
-    final Session s = Sessions.get(p.name);
+    final Session s = Sessions.getOrCreate(p.name);
     
     if (s ==  null) {
       resp.sendError(HttpServletResponse.SC_NOT_FOUND);
@@ -83,7 +83,7 @@ public class FrameServlet extends HttpServlet {
   @Override
   protected void doGet(final HttpServletRequest req, final HttpServletResponse resp) throws IOException {
     final PathInfo p = new PathInfo(req);
-    final Session s = Sessions.get(p.name);
+    final Session s = Sessions.getOrCreate(p.name);
     
     if (s ==  null) {
       resp.sendError(HttpServletResponse.SC_NOT_FOUND);

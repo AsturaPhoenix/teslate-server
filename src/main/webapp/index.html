@@ -2,6 +2,18 @@
   <head>
     <title>Teslate</title>
     <script type="text/javascript">
+      var session = decodeURIComponent(location.search.substring(1));
+      
+      if (!session) {
+        var randRange = 3656158440062976; // 36^10 < 2^54
+        function randPart() {
+          return Math.floor(Math.random() * randRange).toString(36);
+        }
+        session = randPart() + randPart();
+        
+        location.search = session;
+      }
+    
       var lastError;
       var log = "";
       
@@ -10,12 +22,13 @@
       };
       
       var isStopped = false;
-      var lastReload = new Date();
-      var lastProc = new Date();
-      var lastFrameQuery = new Date();
-      var lastFrame = new Date();
-      var lastScreenQuery = new Date();
-      var lastScreen = new Date();
+      var now = new Date();
+      var lastReload = now,
+          lastProc = now,
+          lastFrameQuery = now,
+          lastFrame = now,
+          lastScreenQuery = now,
+          lastScreen = now;
       
       function debugInfo() {
         var debug = document.getElementById("debug");
@@ -69,21 +82,22 @@
       function frame() {
         lastFrameQuery = new Date();
         document.getElementById("frame").src =
-          'https://teslate-server.appspot.com/frame/nautilus/frame.jpeg?v=' +
-          lastFrameQuery.getTime();
+          "https://teslate-server.appspot.com/frame/" + session +
+          "/frame.jpeg?v=" + lastFrameQuery.getTime();
       }
 
       function screen() {
         lastScreenQuery = new Date();
         var ph = new XMLHttpRequest();
-        ph.open("HEAD", "https://teslate-server.appspot.com/frame/nautilus/previous.jpeg");
+        ph.open("HEAD", "https://teslate-server.appspot.com/frame/" + session +
+          "/previous.jpeg");
         ph.onreadystatechange = function() {
           if (ph.readyState == 4) {
             var newScreen = new Date(ph.getResponseHeader("Last-Modified"));
             if (newScreen.getTime() > lastScreen.getTime()) {
               document.getElementById("prev").src =
-                'https://teslate-server.appspot.com/frame/nautilus/previous.jpeg?v=' +
-                lastScreenQuery.getTime();
+                "https://teslate-server.appspot.com/frame/" + session +
+                "/previous.jpeg?v=" + lastScreenQuery.getTime();
               lastScreen = newScreen;
 
             }
@@ -100,9 +114,12 @@
       }
       
       function send(msg) {
-        var cmd = new XMLHttpRequest();
-        cmd.open("POST", "https://teslate-server.appspot.com/command/nautilus")
-        cmd.send(msg);
+      	if (session) {
+          var cmd = new XMLHttpRequest();
+          cmd.open("POST", "https://teslate-server.appspot.com/command/" +
+            session)
+          cmd.send(msg);
+      	}
       }
       
       var lastClick;
@@ -142,10 +159,6 @@
       function debug(msg) {
         log = msg;
       }
-      
-      window.onscroll = function() {
-      	debug("ws");
-      };
     </script>
     <link rel="stylesheet" href="style.css">
   </head>
@@ -181,19 +194,22 @@
       <div id="log">
       </div>
     </div>
-    <img class="canvas" id="frame" src="https://teslate-server.appspot.com/frame/nautilus/frame.jpeg"
+    <img class="canvas" id="frame"
          draggable="false"
          onload="imgLoaded()"
-         onclick="sendMouse(event)"
-         onmousedown="debug('md')"
-         onmousemove="debug('mm')"
-         ondrag="debug('d')"
-         onscroll="debug('s')"
-         ontouchstart="debug('ts')"
-         ontouchmove="debug('t')">
-    <img class="canvas" id="prev" src="https://teslate-server.appspot.com/frame/nautilus/previous.jpeg">
+         onclick="sendMouse(event)">
+    <img class="canvas" id="prev">
     <script type="text/javascript">
       proclp();
+      
+      var prev = document.getElementById("prev");
+      for (var key in prev) {
+        if (key.substr(0, 2) === "on") {
+          prev[key] = function(evt) {
+            return function() { debug(evt); };
+          }(key);
+        }
+      }
     </script>
   </body>
 </html>
