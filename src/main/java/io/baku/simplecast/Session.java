@@ -192,7 +192,9 @@ public class Session {
     }
     
     final boolean copyPrevious;
-    if (initialHistogram == null || patchArea == 0 || patchArea < width * height / 4) {
+    if (initialHistogram == null || patchArea == 0) {
+      copyPrevious = false;
+    } else if (patchArea < width * height / 4) {
       copyPrevious = false;
       log.info("Not diffing; patch area " + patchArea * 100 / width / height + "%");
     } else {
@@ -234,7 +236,12 @@ public class Session {
   }
   
   public void get(final String variant, final HttpServletResponse resp) throws IOException {
-    final byte[] content = Persistence.awaitAuditedImageBytes(name, variant);
+    byte[] content = Persistence.awaitAuditedImageBytes(name, variant);
+    
+    if (content == null) {
+      content = Persistence.getImageBytes(name, "stable.jpeg");
+    }
+    
     if (content == null) {
       resp.sendError(HttpServletResponse.SC_NOT_FOUND);
     } else {

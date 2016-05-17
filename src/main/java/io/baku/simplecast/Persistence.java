@@ -43,6 +43,7 @@ import lombok.extern.java.Log;
 public class Persistence {
   private static final int
     REF_STICKINESS = 10000,
+    USE_POLL_PERIOD = 2000,
     FRAME_POLL_PERIOD = 50,
     FRAME_POLL_TIMEOUT = 2500,
     COMMAND_POLL_PERIOD = 50,
@@ -195,14 +196,10 @@ public class Persistence {
     while (!committed) {
       final Transaction tx = Futures.getUnchecked(datastore.beginTransaction());
       try {
-        if ("previous.jpeg".equals(variant)) {
-          try {
-            prev = propToUuid(finishGet(datastore.get(tx, frameKey)).getProperty(BYTES_PROP));
-            log.info("Previous ref for previous.jpeg: " + prev);
-          } catch (final EntityNotFoundException e) {
-            prev = null;
-          }
-        } else {
+        try {
+          prev = propToUuid(finishGet(datastore.get(tx, frameKey)).getProperty(BYTES_PROP));
+          log.info("Previous ref for " + frameKey + ": " + prev);
+        } catch (final EntityNotFoundException e) {
           prev = null;
         }
         
@@ -230,7 +227,7 @@ public class Persistence {
     
     log.info("Changed " + variant + " ref to " + task.ref + " in datastore");
       
-    if (prev != null) {
+    if (prev != null && !isInUse(name, prev)) {
       // evict
       cache.delete(prev);
       datastore.delete(createKey(prev));
@@ -349,7 +346,7 @@ public class Persistence {
     } else {
       final Entity entity = new Entity(createKey(task.uuid));
       entity.setUnindexedProperty(BYTES_PROP, new Blob(bytes));
-      entity.setIndexedProperty(TIMESTAMP_PROP, task.timestamp);
+      entity.setUnindexedProperty(TIMESTAMP_PROP, task.timestamp);
       datastore.put(entity);
       
       log.info(task.uuid + " saved to datastore");
@@ -360,20 +357,53 @@ public class Persistence {
         log.warning(Throwables.getStackTraceAsString(e));
       }
       
-      UUID previous;
-      try {
-        previous = getRef(name, "previous.jpeg"); 
-      } catch (final EntityNotFoundException e) {
-        previous = null;
-      }
-      if (!task.uuid.equals(previous)) {
-        cache.delete(task.uuid);
-        datastore.delete(entity.getKey());
-        log.info(task.uuid + " evicted from cache and datastore");
-      } else {
-        log.info(task.uuid + " not evicted due to ref as previous");
-      }
+      evictIfUnused(name, task.uuid);
     }
+  }
+  
+  private static void evictIfUnused(final String name, final UUID frame) {
+    if (isInUse(name, frame)) {
+      log.info(frame + " not evicted due to ref");
+    } else {
+      cache.delete(frame);
+      datastore.delete(createKey(frame));
+      log.info(frame + " evicted from cache and datastore");
+    }
+  }
+  
+  private static boolean isInUse(final String name, final UUID frame) {
+    if (checkUse(name, frame)) {
+      return true;
+    }
+    
+    try {
+      Thread.sleep(USE_POLL_PERIOD);
+    } catch (final InterruptedException e) {
+      log.warning(Throwables.getStackTraceAsString(e));
+    }
+    
+    return checkUse(name, frame);
+  }
+  
+  private static boolean checkUse(final String name, final UUID frame) {
+    UUID ref;
+    try {
+      ref = getRef(name, "previous.jpeg"); 
+    } catch (final EntityNotFoundException e) {
+      ref = null;
+    }
+    
+    if (frame.equals(ref)) {
+      return true;
+    }
+    
+    try {
+      ref = getRef(name, "stable.jpeg");
+    } catch (final EntityNotFoundException e) {
+      return false;
+    }
+    
+    return frame.equals(ref);
   }
   
   private static Long getCachedImageLastAccessed(final String name, final String variant) {
