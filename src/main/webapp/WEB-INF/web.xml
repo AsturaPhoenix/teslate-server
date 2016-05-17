@@ -6,11 +6,11 @@
 <web-app xmlns="http://java.sun.com/xml/ns/javaee" version="2.5">
     <servlet>
         <servlet-name>frame</servlet-name>
-        <servlet-class>io.baku.simplecast.FrameServlet</servlet-class>
+        <servlet-class>io.baku.teslate.FrameServlet</servlet-class>
     </servlet>
     <servlet>
         <servlet-name>command</servlet-name>
-        <servlet-class>io.baku.simplecast.CommandServlet</servlet-class>
+        <servlet-class>io.baku.teslate.CommandServlet</servlet-class>
     </servlet>
     <servlet-mapping>
         <servlet-name>frame</servlet-name>

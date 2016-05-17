@@ -1,4 +1,4 @@
-package io.baku.simplecast;
+package io.baku.teslate;
 
 import java.io.IOException;
 import java.io.OutputStream;

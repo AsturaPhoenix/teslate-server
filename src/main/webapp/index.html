@@ -1,6 +1,6 @@
 <html>
   <head>
-    <title>SimpleCast</title>
+    <title>Teslate</title>
     <script type="text/javascript">
       var lastError;
       var log = "";
@@ -69,20 +69,20 @@
       function frame() {
         lastFrameQuery = new Date();
         document.getElementById("frame").src =
-          'https://simplecast-1297.appspot.com/frame/nautilus/frame.jpeg?v=' +
+          'https://teslate-server.appspot.com/frame/nautilus/frame.jpeg?v=' +
           lastFrameQuery.getTime();
       }
 
       function screen() {
         lastScreenQuery = new Date();
         var ph = new XMLHttpRequest();
-        ph.open("HEAD", "https://simplecast-1297.appspot.com/frame/nautilus/previous.jpeg");
+        ph.open("HEAD", "https://teslate-server.appspot.com/frame/nautilus/previous.jpeg");
         ph.onreadystatechange = function() {
           if (ph.readyState == 4) {
             var newScreen = new Date(ph.getResponseHeader("Last-Modified"));
             if (newScreen.getTime() > lastScreen.getTime()) {
               document.getElementById("prev").src =
-                'https://simplecast-1297.appspot.com/frame/nautilus/previous.jpeg?v=' +
+                'https://teslate-server.appspot.com/frame/nautilus/previous.jpeg?v=' +
                 lastScreenQuery.getTime();
               lastScreen = newScreen;
 
@@ -101,7 +101,7 @@
       
       function send(msg) {
         var cmd = new XMLHttpRequest();
-        cmd.open("POST", "https://simplecast-1297.appspot.com/command/nautilus")
+        cmd.open("POST", "https://teslate-server.appspot.com/command/nautilus")
         cmd.send(msg);
       }
       
@@ -181,7 +181,7 @@
       <div id="log">
       </div>
     </div>
-    <img class="canvas" id="frame" src="https://simplecast-1297.appspot.com/frame/nautilus/frame.jpeg"
+    <img class="canvas" id="frame" src="https://teslate-server.appspot.com/frame/nautilus/frame.jpeg"
          draggable="false"
          onload="imgLoaded()"
          onclick="sendMouse(event)"
@@ -191,7 +191,7 @@
          onscroll="debug('s')"
          ontouchstart="debug('ts')"
          ontouchmove="debug('t')">
-    <img class="canvas" id="prev" src="https://simplecast-1297.appspot.com/frame/nautilus/previous.jpeg">
+    <img class="canvas" id="prev" src="https://teslate-server.appspot.com/frame/nautilus/previous.jpeg">
     <script type="text/javascript">
       proclp();
     </script>

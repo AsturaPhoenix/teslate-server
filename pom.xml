@@ -11,7 +11,7 @@
 	<version>1.0</version>
 
 	<groupId>io.baku</groupId>
-	<artifactId>simplecast-server</artifactId>
+	<artifactId>teslate-server</artifactId>
 
 	<!-- Parent POM defines common plugins and properties. -->
 	<parent>
@@ -104,5 +104,5 @@
 		</plugins>
 	</build>
 
-	<name>SimpleCast Server</name>
+	<name>Teslate Server</name>
 </project>

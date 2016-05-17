@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-package io.baku.simplecast;
+package io.baku.teslate;
 
 import java.io.EOFException;
 import java.io.IOException;
