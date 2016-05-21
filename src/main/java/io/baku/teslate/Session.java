@@ -120,17 +120,21 @@ public class Session {
     return convert(source);
   }
   
+  public void setDims(int w, int h) {
+    synchronized (compositeMutex) {
+      width = w;
+      height = h;
+    }
+  }
+  
   public void update(int x, int y, byte[] bytes) {
     final Image patch = ImagesServiceFactory.makeImage(bytes);
     final int
-      cwidth = Math.max(width, x + patch.getWidth()),
-      cheight = Math.max(height, y + patch.getHeight());
+      cwidth = x + patch.getWidth(),
+      cheight = y + patch.getHeight();
     
-    if (validateDimensions(cwidth, cheight)) {
+    if (cwidth > 0 && cwidth <= width && cheight > 0 && cheight <= height) {
       synchronized (compositeMutex) {
-        width = cwidth;
-        height = cheight;
-        
         patchArea += patch.getWidth() * patch.getHeight();
         
         if (composites.size() == 15) {

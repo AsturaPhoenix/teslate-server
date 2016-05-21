@@ -203,13 +203,16 @@
       proclp();
       
       var prev = document.getElementById("prev");
+      var str = "prev: " + prev;
       for (var key in prev) {
+        str += "\n" + key;
         if (key.substr(0, 2) === "on") {
           prev[key] = function(evt) {
             return function() { debug(evt); };
           }(key);
         }
       }
+      debug(str);
     </script>
   </body>
 </html>

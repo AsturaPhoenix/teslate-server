@@ -37,7 +37,11 @@ public class FrameServlet extends HttpServlet {
     if ("frame.jpeg".equals(p.variant)) {
       s.refresh();
       
+      // Reserved protocol version byte;
+      req.getInputStream().read();
+      
       try (final ObjectInputStream oi = new ObjectInputStream(req.getInputStream())) {
+        s.setDims(oi.readInt(), oi.readInt());
         while (true) {
           final int x = oi.readInt(), y = oi.readInt();
           final byte[] buff = new byte[oi.readInt()];
