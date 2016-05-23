@@ -57,21 +57,6 @@ public class FrameServlet extends HttpServlet {
   }
   
   @Override
-  protected void doPost(final HttpServletRequest req, final HttpServletResponse resp) throws IOException {
-    final PathInfo p = new PathInfo(req);
-    
-    try (final ObjectInputStream oin = new ObjectInputStream(req.getInputStream())) {
-      if (req.getPathInfo().length() < 3) {
-        Persistence.handleDatastoreTask(p.name, oin);
-      } else {
-        Sessions.getOrCreate(p.name).handleDatastoreTask(p.variant, oin);
-      }
-    } catch (final ClassNotFoundException e) {
-      throw new RuntimeException(e);
-    }
-  }
-  
-  @Override
   protected void doHead(HttpServletRequest req, HttpServletResponse resp) throws IOException {
     final PathInfo p = new PathInfo(req);
     final Session s = Sessions.getOrCreate(p.name);

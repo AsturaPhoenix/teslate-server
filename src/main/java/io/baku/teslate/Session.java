@@ -6,22 +6,20 @@ import java.awt.image.BufferedImage;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
-import java.io.ObjectInputStream;
 import java.io.OutputStream;
+import java.util.ArrayList;
 import java.util.UUID;
+import java.util.concurrent.Semaphore;
+import java.util.concurrent.TimeUnit;
+import java.util.stream.Collectors;
 
 import javax.imageio.ImageIO;
 import javax.servlet.http.HttpServletResponse;
 
 import com.google.api.client.repackaged.com.google.common.base.Throwables;
 import com.google.appengine.api.datastore.EntityNotFoundException;
-import com.google.appengine.api.taskqueue.Queue;
-import com.google.appengine.api.taskqueue.QueueFactory;
-import com.google.appengine.api.taskqueue.TaskOptions;
-import com.google.appengine.api.taskqueue.TaskOptions.Method;
 
 import lombok.RequiredArgsConstructor;
-import lombok.ToString;
 import lombok.extern.java.Log;
 
 @Log
@@ -32,6 +30,9 @@ public class Session {
       STABLE_UPDATE = 2000,
       STABLE_TIME = 2000;
   
+  private static final long
+      COMMAND_TIMEOUT = 10000;
+  
   private static final int
       DIFF_COLOR_THRESH = 128,
       DIFF_RES = 5;
@@ -39,63 +40,19 @@ public class Session {
   private static final float
       DIFF_THRESH = .22f;
   
-  private static final Queue queue = QueueFactory.getDefaultQueue();
-  
   private final String name;
   
   private final Object compositeMutex = new Object();
-  private BufferedImage initialFrame, composite;
+  private BufferedImage frame, composite;
+  private volatile BufferedImage stable;
+  private final Object prevMutex = new Object();
+  private byte[] previous;
+  private long lastScreen, lastPersistedDurably;
+  private final Semaphore
+      frameSemaphore = new Semaphore(0),
+      prevSemaphore = new Semaphore(0);
   private Graphics2D g;
   private int patchArea;
-  
-  private static class Timer {
-    private long t0, ti, tl, dt;
-    
-    public void start() {
-      tl = System.currentTimeMillis();
-      if (ti < 0) {
-        ti = tl - t0;
-      }
-    }
-    
-    public void stop() {
-      dt += System.currentTimeMillis() - tl;
-    }
-    
-    public void reset() {
-      dt = 0;
-      ti = -1;
-      t0 = System.currentTimeMillis();
-    }
-    
-    @Override
-    public String toString() {
-      return "(dt: " + Long.toString(dt) + " ms, ti: " + Long.toString(ti) + " ms)";
-    }
-  }
-  
-  @ToString
-  private static class Metrics {
-    public final Timer
-      prevDecode = new Timer(),
-      prevComposite = new Timer(),
-      patchDecode = new Timer(),
-      patchComposite = new Timer();
-    private int patchCount;
-    private final Timer
-      compositeEncode = new Timer();
-    
-    public void reset() {
-      prevDecode.reset();
-      prevComposite.reset();
-      patchDecode.reset();
-      patchComposite.reset();
-      patchCount = 0;
-      compositeEncode.reset();
-    }
-  }
-  
-  private final Metrics metrics = new Metrics();
   
   private boolean validateDimensions(final int w, final int h) {
     return w <= 4000 && w > 0 && h <= 4000 && h > 0;
@@ -103,8 +60,6 @@ public class Session {
   
   public void setDims(int w, int h) {
     synchronized (compositeMutex) {
-      metrics.reset();
-      
       composite = new BufferedImage(w, h, BufferedImage.TYPE_INT_RGB);
       if (g != null) {
         g.dispose();
@@ -134,23 +89,22 @@ public class Session {
   }
   
   public void refresh() {
-    final byte[] frameBytes = Persistence.getImageBytes(name, "frame.jpeg");
     synchronized (compositeMutex) {
-      if (frameBytes != null) {
-        metrics.prevDecode.start();
-        initialFrame = read(frameBytes);
-        metrics.prevDecode.stop();
-        
-        if (validateDimensions(initialFrame.getWidth(), initialFrame.getHeight())) {
-          metrics.prevComposite.start();
-          composite(0, 0, initialFrame);
-          metrics.prevComposite.stop();
+      if (frame == null) {
+        final byte[] frameBytes = Persistence.getImageBytes(name, "frame.jpeg");
+        if (frameBytes != null) {
+          frame = read(frameBytes);
+          
+          if (!validateDimensions(frame.getWidth(), frame.getHeight())) {
+            log.warning("Previous frame is corrupt: " + frame.getWidth() + " x " + frame.getHeight());
+            frame = null;
+          }
         } else {
-          log.warning("Previous frame is corrupt: " + initialFrame.getWidth() + " x " + initialFrame.getHeight());
-          initialFrame = null;
+          frame = null;
         }
-      } else {
-        initialFrame = null;
+      }
+      if (frame != null) {
+        composite(0, 0, frame);
       }
       patchArea = 0;
     }
@@ -161,9 +115,7 @@ public class Session {
   }
   
   public void update(int x, int y, byte[] bytes) {
-    metrics.patchDecode.start();
     final BufferedImage patch = read(bytes);
-    metrics.patchDecode.stop();
     final int
       cwidth = x + patch.getWidth(),
       cheight = y + patch.getHeight();
@@ -171,12 +123,7 @@ public class Session {
     if (cwidth > 0 && cwidth <= composite.getWidth() && cheight > 0 && cheight <= composite.getHeight()) {
       synchronized (compositeMutex) {
         patchArea += patch.getWidth() * patch.getHeight();
-        
-        metrics.patchComposite.start();
         composite(x, y, patch);
-        metrics.patchComposite.stop();
-        
-        metrics.patchCount++;
       }
     } else {
       log.warning("Invalid patch " + patch.getWidth() + " x " + patch.getHeight() +
@@ -210,11 +157,12 @@ public class Session {
             }
         }
     }
+    
     if (acc > pxThreshold) {
-        System.out.println("diff: " + acc * 100f / denom + "%");
+        log.info("diff: " + acc * 100f / denom + "%");
         return true;
     } else if (acc > pxThreshold / 2) {
-        System.out.println("diff: " + acc * 100f / denom + "% (below threshold)");
+        log.info("diff: " + acc * 100f / denom + "% (below threshold)");
     }
 
     return false;
@@ -225,84 +173,103 @@ public class Session {
       g.dispose();
       g = null;
     }
-    
-    final Long frameLastPersistedDurably = Persistence.getCachedImageLastPersistedDurably(name, "frame.jpeg");
-    
-    metrics.compositeEncode.start();
-    final byte[] compositeBytes = write(composite, "png");
-    metrics.compositeEncode.stop();
-    
-    if (frameLastPersistedDurably == null || System.currentTimeMillis() >= frameLastPersistedDurably + STABLE_UPDATE) {
-      final UUID frameUuid = Persistence.saveImage(name, compositeBytes);
-      Persistence.setRef(name, "frame.jpeg", frameUuid, true);
 
-      final String stableKey = "/frame/" + name + "/stable.jpeg";
-      queue.add(TaskOptions.Builder.withUrl(stableKey)
-          .etaMillis(System.currentTimeMillis() + STABLE_TIME)
-          .method(Method.PUT)
-          .payload(Persistence.uuidToBytes(frameUuid)));
-    } else {
-      Persistence.setDirect(name, "frame.jpeg", compositeBytes);
+    final BufferedImage initialFrame, frame;
+    final int patchArea;
+    synchronized(compositeMutex) {
+      initialFrame = this.frame;
+      frame = this.frame = this.composite;
+      frameSemaphore.release();
+      patchArea = this.patchArea;
     }
     
-    final boolean copyPrevious;
-    if (initialFrame == null || patchArea == 0) {
-      copyPrevious = false;
-    } else if (patchArea < composite.getWidth() * composite.getHeight() / 4) {
-      copyPrevious = false;
-      log.info("Not diffing; patch area " + patchArea * 100 / composite.getWidth() / composite.getHeight() + "%");
-    } else {
-      final BufferedImage initialFrame, composite;
-      synchronized (compositeMutex) {
-        initialFrame = this.initialFrame;
-        composite = this.composite;
+    Async.trap(Async.EXEC.submit(() -> {
+      final byte[] compositeBytes = write(frame, "png");
+      
+      if (System.currentTimeMillis() >= lastPersistedDurably + STABLE_UPDATE) {
+        final UUID frameUuid = Persistence.saveImage(name, compositeBytes);
+        Persistence.setRef(name, "frame.jpeg", frameUuid, true);
+        log.info("Persisting " + frameUuid);
+        
+        Async.trap(Async.EXEC.schedule(() -> {
+          try {
+            stable = frame;
+            Persistence.setRef(name, "stable.jpeg", frameUuid, false);
+          } catch (final Exception e) {
+            log.warning(Throwables.getStackTraceAsString(e));
+          }
+        }, STABLE_TIME, TimeUnit.MILLISECONDS));
       }
       
-      if (diff(initialFrame, composite)) {
-        copyPrevious = System.currentTimeMillis() - getLastModified("previous.jpeg") > SCREEN_REFRACTORY;
-      } else {
+      final boolean copyPrevious;
+      if (initialFrame == null || patchArea == 0) {
         copyPrevious = false;
+      } else if (patchArea < frame.getWidth() * frame.getHeight() / 4) {
+        copyPrevious = false;
+        log.info("Not diffing; patch area " + patchArea * 100 / frame.getWidth() / frame.getHeight() + "%");
+      } else {
+        
+        if (diff(initialFrame, frame)) {
+          copyPrevious = System.currentTimeMillis() - getLastModified("previous.jpeg") > SCREEN_REFRACTORY;
+        } else {
+          copyPrevious = false;
+        }
       }
-    }
-
-    if (copyPrevious) {
-      try {
-        final UUID stableUuid = Persistence.getRef(name, "stable.jpeg");
-        log.info("Copying previous");
-        Persistence.setRef(name, "previous.jpeg", stableUuid, true);
-      } catch (final EntityNotFoundException e) {
-        log.info("No stable.jpeg reference found");
+  
+      if (copyPrevious) {
+        synchronized (prevMutex) {
+          previous = write(stable, "jpeg");
+          lastScreen = System.currentTimeMillis();
+          prevSemaphore.release();
+        }
+        
+        try {
+          final UUID stableUuid = Persistence.getRef(name, "stable.jpeg");
+          log.info("Copying previous");
+          Persistence.setRef(name, "previous.jpeg", stableUuid, true);
+        } catch (final EntityNotFoundException e) {
+          log.info("No stable.jpeg reference found");
+        }
       }
-    }
-    
-    log.info(metrics.toString());
+      return null;
+    }));
   }
   
   public void put(final String variant, final UUID uuid) throws IOException {
     Persistence.setRef(name, variant, uuid, false);
   }
   
-  public void handleDatastoreTask(final String variant, final ObjectInputStream oin)
-      throws ClassNotFoundException, IOException {
-    Persistence.handleDatastoreTask(name, variant, oin);
-  }
-  
   public void get(final String variant, final HttpServletResponse resp) throws IOException {
-    byte[] content = Persistence.awaitAuditedImageBytes(name, variant);
-    
-    if (content == null) {
-      content = Persistence.getImageBytes(name, "stable.jpeg");
-    }
-    
-    if (content == null) {
-      resp.sendError(HttpServletResponse.SC_NOT_FOUND);
-    } else {
-      resp.setContentType("image/jpeg");
+    if ("frame.jpeg".equals(variant)) {
+      try {
+        frameSemaphore.tryAcquire(Persistence.FRAME_POLL_TIMEOUT, TimeUnit.MILLISECONDS);
+      } catch (final InterruptedException e) {
+        log.warning(Throwables.getStackTraceAsString(e));
+      }
       
-      final BufferedImage contentImage = read(content);
-      
-      try (final OutputStream o = resp.getOutputStream()) {
-    	  ImageIO.write(contentImage, "jpeg", o);
+      synchronized(compositeMutex) {
+        frameSemaphore.drainPermits();
+        if (frame == null) {
+          resp.sendError(HttpServletResponse.SC_NOT_FOUND);
+        } else {
+          resp.setContentType("image/jpeg");
+          try (final OutputStream o = resp.getOutputStream()) {
+            o.write(write(frame, "jpeg"));
+          }
+        }
+      }
+    } else if ("previous.jpeg".equals(variant)) {
+      // we've already waited in the HEAD call
+      synchronized(prevMutex) {
+        prevSemaphore.drainPermits();
+        if (previous == null) {
+          resp.sendError(HttpServletResponse.SC_NOT_FOUND);
+        } else {
+          resp.setContentType("image/jpeg");
+          try (final OutputStream o = resp.getOutputStream()) {
+            o.write(previous);
+          }
+        }
       }
     }
   }
@@ -312,6 +279,49 @@ public class Session {
   }
   
   public long awaitLastModified(final String variant) throws IOException {
-    return Persistence.awaitImageLastModified(name, variant);
+    try {
+      prevSemaphore.tryAcquire(Persistence.FRAME_POLL_TIMEOUT, TimeUnit.MILLISECONDS);
+    } catch (final InterruptedException e) {
+      log.warning(Throwables.getStackTraceAsString(e));
+    }
+    
+    synchronized(prevMutex) {
+      prevSemaphore.drainPermits();
+      return lastScreen;
+    }
+  }
+  
+  private final ArrayList<Command> commands = new ArrayList<>();
+  
+  public void pushCommand(final byte[] data) {
+    final Command command = new Command(data);
+    synchronized(commands) {
+      int i;
+      for (i = commands.size(); i > 0; i--) {
+        if (commands.get(i - 1).getSequenceId() <= command.getSequenceId()) {
+          break;
+        }
+      }
+      commands.add(i, command);
+      commands.notifyAll();
+    }
+  }
+  
+  public byte[] flushCommands() {
+    synchronized(commands) {
+      if (commands.isEmpty()) {
+        try {
+          commands.wait(COMMAND_TIMEOUT);
+        } catch (final InterruptedException e) {
+          log.warning(Throwables.getStackTraceAsString(e));
+        }
+      }
+      
+      final String serialized = commands.stream()
+        .map(Command::getCommandString)
+        .collect(Collectors.joining("\n"));
+      commands.clear();
+      return serialized.getBytes();
+    }
   }
 }

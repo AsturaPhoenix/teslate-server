@@ -1,3 +1,4 @@
+<!DOCTYPE html>
 <html>
   <head>
     <title>Teslate</title>
@@ -15,7 +16,6 @@
       }
     
       var lastError;
-      var log = "";
       
       window.onerror = function(message, url, lineNumber) {
         lastError = message + "\n" + url + ":" + lineNumber;
@@ -26,8 +26,8 @@
       var EPOCH = new Date(0);
       var lastReload = now,
           lastProc = now,
-          lastFrameQuery = now,
-          lastFrame = now,
+          lastFrameQuery = EPOCH,
+          lastFrame = EPOCH,
           lastScreenQuery = EPOCH,
           lastScreen = EPOCH;
       
@@ -46,9 +46,6 @@
         
         if (lastError) {
           debug.innerText = lastError;
-        }
-        if (log) {
-          document.getElementById("log").innerText = log;
         }
       }
 
@@ -115,34 +112,30 @@
         queue(frame, 0);
       }
       
+      var seqid = 0;
       function send(msg) {
       	if (session) {
           var cmd = new XMLHttpRequest();
           cmd.open("POST", "https://teslate-server.appspot.com/command/" +
-            session)
+            session);
+          msg = seqid++ + "|" + msg;
           cmd.send(msg);
       	}
       }
       
-      var lastClick;
+      var lastCommand = "MU", lastCommandAt = EPOCH;
       
-      function sendMouse(event) {
+      function sendMouse(command, event) {
         var img = document.getElementById("frame");
         var nx = event.offsetX / img.width,
             ny = event.offsetY / img.height;
         var args = [nx, ny].join(",");
+        var now = new Date();
         
-        if (lastClick) {
-          send(["MD", lastClick.args, args].join("|"));
-          clearTimeout(lastClick.timeout);
-          lastClick = null;
-        } else {
-          lastClick = {
-            timeout: setTimeout(function() {
-              send(["MC", args].join("|"));
-              lastClick = null;
-            }, 0),
-            args: args};
+        if (command !== "MM" || lastCommand !== "MU" && now.getTime() - lastCommandAt.getTime() >= 200) {
+          send([command, args].join("|"));
+          lastCommandAt = now;
+          lastCommand = command;
         }
       }
 
@@ -151,6 +144,7 @@
         if (isStopped) {
           bn.src = "https://raw.githubusercontent.com/google/material-design-icons/master/av/1x_web/ic_stop_white_24dp.png";
           isStopped = false;
+          lastFrame = new Date();
           proclp();
         } else {
           bn.src = "https://raw.githubusercontent.com/google/material-design-icons/master/av/1x_web/ic_play_arrow_white_24dp.png";
@@ -159,7 +153,8 @@
       }
       
       function debug(msg) {
-        log = msg;
+        var elem = document.getElementById("log");
+        elem.innerText = msg + "\n" + elem.innerText;
       }
     </script>
     <link rel="stylesheet" href="style.css">
@@ -171,9 +166,9 @@
       <table class="buttons">
         <tr>
           <td colspan="6" onclick="toggle()">
-	    <div id="status" class="status">
+            <div id="status" class="status">
               <img id="togglebn" src="https://raw.githubusercontent.com/google/material-design-icons/master/av/1x_web/ic_stop_white_24dp.png">
-	    </div>
+            </div>
           </td>
         <tr>
           <td colspan="3" onclick="send('ZI')">
@@ -196,41 +191,17 @@
       <div id="log">
       </div>
     </div>
-    <img class="canvas" id="frame"
-         onload="imgLoaded()"
-         onclick="sendMouse(event)">
+    <div id="framescroll" class="scroll-container">
+      <img class="canvas" id="frame" onload="imgLoaded()">
+      <div class="scroll-area"
+        onmousedown="sendMouse('MD', event)"
+        onmousemove="sendMouse('MM', event)"
+        onmouseup="sendMouse('MU', event)">
+      </div>
+    </div>
     <img class="canvas" id="prev">
     <script type="text/javascript">
       proclp();
-      
-      function debugAllEvents(obj) {
-        var events = [];
-        for (var proto = obj; proto; proto = Object.getPrototypeOf(proto)) {
-          var props = Object.getOwnPropertyNames(proto);
-          for (var i = 0; i < props.length; i++) {
-            if (props[i].substr(0, 2) === "on") {
-              events.push(props[i].substr(2));
-            }
-          }
-        }
-        debug(events.join("\n"));
-        
-        function debugEvent(events) {
-          for (var i = 0; i < events.length; i++) {
-            obj.addEventListener(events[i], function(evt) {
-              return function() {
-                debug(evt);
-              };
-            }(events[i]));
-          }
-        }
-        
-        debugEvent(events);
-      }
-      
-      debugAllEvents(window);
-      debugAllEvents(document);
-      debugAllEvents(document.getElementById("frame"));
     </script>
   </body>
 </html>
