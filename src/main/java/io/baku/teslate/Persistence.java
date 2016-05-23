@@ -45,7 +45,7 @@ public class Persistence {
     REF_STICKINESS = 10000,
     USE_POLL_PERIOD = 2000,
     FRAME_POLL_PERIOD = 50,
-    FRAME_POLL_TIMEOUT = 2500,
+    FRAME_POLL_TIMEOUT = 5000,
     COMMAND_POLL_PERIOD = 50,
     COMMAND_POLL_TIMEOUT = 10000;
   
@@ -288,19 +288,25 @@ public class Persistence {
   public static byte[] awaitAuditedImageBytes(final String name, final String variant)
       throws IOException {
     // Use 0 rather than Long.MIN_VALUE to ensure that we can subtract sanely.
-    long lastAccessed = 0;
+    final long lastAccessed;
+    final Long cachedLastAccessed = getCachedImageLastAccessed(name, variant);
+    
+    if (cachedLastAccessed == null) {
+      log.info("Cache miss (" + name + "/" + variant + "/last-accessed)");
+      lastAccessed = 0;
+    } else {
+      lastAccessed = cachedLastAccessed;
+    }
+    
+    byte[] imageBytes = null;
     //Poll for changes because memcache doesn't expose distributed events
-    for (int i = 0; i < FRAME_POLL_TIMEOUT / FRAME_POLL_PERIOD; i++) {
-      Long cachedLastAccessed = getCachedImageLastAccessed(name, variant);
-      
-      if (cachedLastAccessed == null) {
-        log.info("Cache miss (" + name + "/" + variant + "/last-accessed)");
-      } else {
-        lastAccessed = cachedLastAccessed;
-      }
-      
-      if (getImageLastModified(name,  variant) > lastAccessed) {
-        break;
+    while (true) {
+      if (System.currentTimeMillis() >= lastAccessed + FRAME_POLL_TIMEOUT ||
+          getImageLastModified(name,  variant) > lastAccessed) {
+      	imageBytes = getAuditedImageBytes(name, variant);
+      	if (imageBytes != null) {
+      	  break;
+      	}
       }
       
       try {
@@ -311,6 +317,10 @@ public class Persistence {
       }
     }
     
+    return imageBytes == null ? getAuditedImageBytes(name, variant) : imageBytes;
+  }
+  
+  private static byte[] getAuditedImageBytes(final String name, final String variant) {
     cache.put(name + "/" + variant + "/last-accessed", System.currentTimeMillis());
     return getImageBytes(name, variant);
   }
@@ -436,6 +446,41 @@ public class Persistence {
     
     // Use 0 rather than Long.MIN_VALUE to ensure we can subtract sanely.
     return ret == null? 0 : ret;
+  }
+  
+  public static long awaitImageLastModified(final String name, final String variant) {
+    final String lastQueriedKey = name + "/" + variant + "/last-queried";
+    // Use 0 rather than Long.MIN_VALUE to ensure that we can subtract sanely.
+    final long lastQueried;
+    long lastModified = 0;
+    Long cachedLastQueried = readCachedLong(lastQueriedKey);
+    
+    if (cachedLastQueried == null) {
+      log.info("Cache miss (" + lastQueriedKey + ")");
+      lastQueried = 0;
+    } else {
+      lastQueried = cachedLastQueried;
+    }
+    
+    //Poll for changes because memcache doesn't expose distributed events
+    while(true) {
+      lastModified = getImageLastModified(name,  variant);
+      if (lastModified > lastQueried ||
+          System.currentTimeMillis() >= lastQueried + FRAME_POLL_TIMEOUT) {
+        break;
+      }
+      
+      try {
+        Thread.sleep(FRAME_POLL_PERIOD);
+      } catch (final InterruptedException e) {
+        log.warning(Throwables.getStackTraceAsString(e));
+        break;
+      }
+    }
+    
+    cache.put(lastQueriedKey, System.currentTimeMillis());
+    
+    return lastModified;
   }
   
   private static @Nullable Long readCachedLong(final String key) {

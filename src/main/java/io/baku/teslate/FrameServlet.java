@@ -80,7 +80,7 @@ public class FrameServlet extends HttpServlet {
       resp.sendError(HttpServletResponse.SC_NOT_FOUND);
     } else {
       resp.setContentType("image/jpeg");
-      resp.setDateHeader("Last-Modified", s.getLastModified(p.variant));
+      resp.setDateHeader("Last-Modified", s.awaitLastModified(p.variant));
     }
   }
   

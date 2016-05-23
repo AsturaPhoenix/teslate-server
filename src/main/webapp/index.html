@@ -23,12 +23,13 @@
       
       var isStopped = false;
       var now = new Date();
+      var EPOCH = new Date(0);
       var lastReload = now,
           lastProc = now,
           lastFrameQuery = now,
           lastFrame = now,
-          lastScreenQuery = now,
-          lastScreen = now;
+          lastScreenQuery = EPOCH,
+          lastScreen = EPOCH;
       
       function debugInfo() {
         var debug = document.getElementById("debug");
@@ -70,7 +71,7 @@
           frame();
         }
 
-        if (lastProc.getTime() - lastScreenQuery.getTime() > 7500) {
+        if (lastProc.getTime() - lastScreenQuery.getTime() > 10000) {
           screen();
         }
 
@@ -99,9 +100,10 @@
                 "https://teslate-server.appspot.com/frame/" + session +
                 "/previous.jpeg?v=" + lastScreenQuery.getTime();
               lastScreen = newScreen;
-
+              queue(screen, 2000);
+            } else {
+              queue(screen, 0);
             }
-            queue(screen, 1000);
           }
         };
         ph.send();
@@ -195,24 +197,40 @@
       </div>
     </div>
     <img class="canvas" id="frame"
-         draggable="false"
          onload="imgLoaded()"
          onclick="sendMouse(event)">
     <img class="canvas" id="prev">
     <script type="text/javascript">
       proclp();
       
-      var prev = document.getElementById("prev");
-      var str = "prev: " + prev;
-      for (var key in prev) {
-        str += "\n" + key;
-        if (key.substr(0, 2) === "on") {
-          prev[key] = function(evt) {
-            return function() { debug(evt); };
-          }(key);
+      function debugAllEvents(obj) {
+        var events = [];
+        for (var proto = obj; proto; proto = Object.getPrototypeOf(proto)) {
+          var props = Object.getOwnPropertyNames(proto);
+          for (var i = 0; i < props.length; i++) {
+            if (props[i].substr(0, 2) === "on") {
+              events.push(props[i].substr(2));
+            }
+          }
         }
+        debug(events.join("\n"));
+        
+        function debugEvent(events) {
+          for (var i = 0; i < events.length; i++) {
+            obj.addEventListener(events[i], function(evt) {
+              return function() {
+                debug(evt);
+              };
+            }(events[i]));
+          }
+        }
+        
+        debugEvent(events);
       }
-      debug(str);
+      
+      debugAllEvents(window);
+      debugAllEvents(document);
+      debugAllEvents(document.getElementById("frame"));
     </script>
   </body>
 </html>

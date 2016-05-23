@@ -33,7 +33,7 @@ public class Session {
       SCREEN_REFRACTORY = 5000,
       STABLE_UPDATE = 2000,
       STABLE_TIME = 2000,
-      DIFF_THRESH = 70 * DIFF_MAGNITUDE;
+      DIFF_THRESH = 75 * DIFF_MAGNITUDE;
   
   private static final ImagesService imagesService = ImagesServiceFactory.getImagesService();
   private static final Queue queue = QueueFactory.getDefaultQueue();
@@ -264,5 +264,9 @@ public class Session {
   
   public long getLastModified(final String variant) throws IOException {
     return Persistence.getImageLastModified(name,  variant);
+  }
+  
+  public long awaitLastModified(final String variant) throws IOException {
+    return Persistence.awaitImageLastModified(name, variant);
   }
 }
