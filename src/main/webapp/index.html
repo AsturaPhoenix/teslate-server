@@ -1,3 +1,4 @@
+<!DOCTYPE html>
 <html>
   <head>
     <title>Teslate</title>
@@ -15,7 +16,6 @@
       }
     
       var lastError;
-      var log = "";
       
       window.onerror = function(message, url, lineNumber) {
         lastError = message + "\n" + url + ":" + lineNumber;
@@ -26,8 +26,8 @@
       var EPOCH = new Date(0);
       var lastReload = now,
           lastProc = now,
-          lastFrameQuery = now,
-          lastFrame = now,
+          lastFrameQuery = EPOCH,
+          lastFrame = EPOCH,
           lastScreenQuery = EPOCH,
           lastScreen = EPOCH;
       
@@ -46,9 +46,6 @@
         
         if (lastError) {
           debug.innerText = lastError;
-        }
-        if (log) {
-          document.getElementById("log").innerText = log;
         }
       }
 
@@ -151,6 +148,7 @@
         if (isStopped) {
           bn.src = "https://raw.githubusercontent.com/google/material-design-icons/master/av/1x_web/ic_stop_white_24dp.png";
           isStopped = false;
+          lastFrame = new Date();
           proclp();
         } else {
           bn.src = "https://raw.githubusercontent.com/google/material-design-icons/master/av/1x_web/ic_play_arrow_white_24dp.png";
@@ -159,7 +157,8 @@
       }
       
       function debug(msg) {
-        log = msg;
+        var elem = document.getElementById("log");
+        elem.innerText = msg + "\n" + elem.innerText;
       }
     </script>
     <link rel="stylesheet" href="style.css">
@@ -171,9 +170,9 @@
       <table class="buttons">
         <tr>
           <td colspan="6" onclick="toggle()">
-	    <div id="status" class="status">
+            <div id="status" class="status">
               <img id="togglebn" src="https://raw.githubusercontent.com/google/material-design-icons/master/av/1x_web/ic_stop_white_24dp.png">
-	    </div>
+            </div>
           </td>
         <tr>
           <td colspan="3" onclick="send('ZI')">
@@ -196,12 +195,72 @@
       <div id="log">
       </div>
     </div>
-    <img class="canvas" id="frame"
-         onload="imgLoaded()"
-         onclick="sendMouse(event)">
-    <img class="canvas" id="prev">
+    <div id="framescroll" class="scroll-container" onclick="sendMouse(event)">
+      <img class="canvas" id="frame" onload="imgLoaded()">
+    </div>
+    <div id="prevscroll" class="scroll-container">
+      <img class="canvas" id="prev">
+        <div class="scroll-area">
+          <div class="scroll-surface">
+    		</div>
+      </div>
+    </div>
     <script type="text/javascript">
-      proclp();
+      var framescroll = document.getElementById("framescroll");
+      
+      function scrollcell(xpct, ypct) {
+        var scrollArea = document.createElement("div"),
+            scrollSurface = document.createElement("div");
+        
+        scrollArea.className = "scroll-area";
+        scrollSurface.className = "scroll-surface";
+        
+        scrollArea.style.left = xpct + "%";
+        scrollArea.style.top = ypct + "%";
+        
+        scrollArea.appendChild(scrollSurface);
+        framescroll.appendChild(scrollArea);
+        
+        var sox, soy;
+        function resetScroll() {
+          scrollArea.scrollLeft = sox = Math.floor(scrollArea.scrollWidth / 2);
+          scrollArea.scrollTop = soy = Math.floor(scrollArea.scrollHeight / 2);
+        }
+        
+        resetScroll();
+        
+        var nx = xpct / 100,
+            ny = ypct / 100;
+        
+        scrollArea.onscroll = function() {
+          var dx = scrollArea.scrollLeft - sox,
+              dy = scrollArea.scrollTop - soy;
+          
+          if (dx || dy) {
+            debug(nx + "," + ny + "|" + dx + "," + dy);
+            
+            resetScroll();
+          }
+        };
+        
+        scrollSurface.onmousedown = function(event) {
+          debug("mousedown " + event.clientX + ", " + event.clientY);
+        };
+        
+        scrollSurface.onmouseup = function(event) {
+          debug("mouseup " + event.clientX + ", " + event.clientY);
+        };
+        
+        scrollSurface.onmousemove = function(event) {
+          debug("mousemove " + event.clientX + ", " + event.clientY);
+        };
+      }
+      
+      for (var i = 0; i < 100; i += 10) {
+        for (var j = 0; j < 100; j += 10) {
+          scrollcell(i, j);
+        }
+      }
       
       function debugAllEvents(obj) {
         var events = [];
@@ -213,7 +272,6 @@
             }
           }
         }
-        debug(events.join("\n"));
         
         function debugEvent(events) {
           for (var i = 0; i < events.length; i++) {
@@ -228,9 +286,11 @@
         debugEvent(events);
       }
       
-      debugAllEvents(window);
-      debugAllEvents(document);
-      debugAllEvents(document.getElementById("frame"));
+      debugAllEvents(document.getElementById("prevscroll"));
+      debugAllEvents(document.getElementById("prevscrollarea"));
+      debugAllEvents(document.getElementById("prevscrollsurface"));
+    
+      proclp();
     </script>
   </body>
 </html>
