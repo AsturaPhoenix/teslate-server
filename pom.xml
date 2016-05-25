@@ -78,6 +78,8 @@
 						<resource>
 							<directory>${basedir}/src/main/webapp/WEB-INF</directory>
 							<filtering>true</filtering>
+							<exclude>**/*.jar</exclude>
+                            <exclude>**/*.so</exclude>
 							<targetPath>WEB-INF</targetPath>
 						</resource>
 					</webResources>

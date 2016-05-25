@@ -1,148 +1,182 @@
 package io.baku.teslate;
 
+import java.awt.Color;
+import java.awt.Graphics2D;
+import java.awt.image.BufferedImage;
+import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.ObjectInputStream;
 import java.io.OutputStream;
-import java.util.ArrayList;
 import java.util.UUID;
 
+import javax.imageio.ImageIO;
 import javax.servlet.http.HttpServletResponse;
 
 import com.google.api.client.repackaged.com.google.common.base.Throwables;
 import com.google.appengine.api.datastore.EntityNotFoundException;
-import com.google.appengine.api.images.Composite;
-import com.google.appengine.api.images.Image;
-import com.google.appengine.api.images.ImagesService;
-import com.google.appengine.api.images.ImagesService.OutputEncoding;
-import com.google.appengine.api.images.ImagesServiceFactory;
-import com.google.appengine.api.images.ImagesServiceFailureException;
 import com.google.appengine.api.taskqueue.Queue;
 import com.google.appengine.api.taskqueue.QueueFactory;
 import com.google.appengine.api.taskqueue.TaskOptions;
 import com.google.appengine.api.taskqueue.TaskOptions.Method;
 
 import lombok.RequiredArgsConstructor;
+import lombok.ToString;
 import lombok.extern.java.Log;
 
 @Log
 @RequiredArgsConstructor
 public class Session {
-  private static final long
-      DIFF_MAGNITUDE = 10000;
   private static long
       SCREEN_REFRACTORY = 5000,
       STABLE_UPDATE = 2000,
-      STABLE_TIME = 2000,
-      DIFF_THRESH = 75 * DIFF_MAGNITUDE;
+      STABLE_TIME = 2000;
   
-  private static final ImagesService imagesService = ImagesServiceFactory.getImagesService();
+  private static final int
+      DIFF_COLOR_THRESH = 128,
+      DIFF_RES = 5;
+  
+  private static final float
+      DIFF_THRESH = .22f;
+  
   private static final Queue queue = QueueFactory.getDefaultQueue();
   
   private final String name;
   
   private final Object compositeMutex = new Object();
-  private final ArrayList<Composite> composites = new ArrayList<>();
-  private int[][] initialHistogram;
-  private int width, height;
-  private int patchArea; 
+  private BufferedImage initialFrame, composite;
+  private Graphics2D g;
+  private int patchArea;
+  
+  private static class Timer {
+    private long t0, ti, tl, dt;
+    
+    public void start() {
+      tl = System.currentTimeMillis();
+      if (ti < 0) {
+        ti = tl - t0;
+      }
+    }
+    
+    public void stop() {
+      dt += System.currentTimeMillis() - tl;
+    }
+    
+    public void reset() {
+      dt = 0;
+      ti = -1;
+      t0 = System.currentTimeMillis();
+    }
+    
+    @Override
+    public String toString() {
+      return "(dt: " + Long.toString(dt) + " ms, ti: " + Long.toString(ti) + " ms)";
+    }
+  }
+  
+  @ToString
+  private static class Metrics {
+    public final Timer
+      prevDecode = new Timer(),
+      prevComposite = new Timer(),
+      patchDecode = new Timer(),
+      patchComposite = new Timer();
+    private int patchCount;
+    private final Timer
+      compositeEncode = new Timer();
+    
+    public void reset() {
+      prevDecode.reset();
+      prevComposite.reset();
+      patchDecode.reset();
+      patchComposite.reset();
+      patchCount = 0;
+      compositeEncode.reset();
+    }
+  }
+  
+  private final Metrics metrics = new Metrics();
   
   private boolean validateDimensions(final int w, final int h) {
     return w <= 4000 && w > 0 && h <= 4000 && h > 0;
   }
   
-  public void refresh() throws IOException {
+  public void setDims(int w, int h) {
+    synchronized (compositeMutex) {
+      metrics.reset();
+      
+      composite = new BufferedImage(w, h, BufferedImage.TYPE_INT_RGB);
+      if (g != null) {
+        g.dispose();
+      }
+      g = composite.createGraphics();
+    }
+  }
+  
+  private BufferedImage read(final byte[] bytes) {
+    try {
+      return ImageIO.read(new ByteArrayInputStream(bytes));
+    } catch (final IOException e) {
+      log.severe(Throwables.getStackTraceAsString(e));
+      throw new RuntimeException(e);
+    }
+  }
+  
+  private byte[] write(final BufferedImage img, final String format) {
+    final ByteArrayOutputStream bout = new ByteArrayOutputStream();
+    try {
+      ImageIO.write(img, format, bout);
+    } catch (final IOException e) {
+      log.severe(Throwables.getStackTraceAsString(e));
+      throw new RuntimeException(e);
+    }
+    return bout.toByteArray();
+  }
+  
+  public void refresh() {
     final byte[] frameBytes = Persistence.getImageBytes(name, "frame.jpeg");
     synchronized (compositeMutex) {
-      composites.clear();
       if (frameBytes != null) {
-        final Image frameImage = ImagesServiceFactory.makeImage(frameBytes);
-        width = frameImage.getWidth();
-        height = frameImage.getHeight();
-        if (validateDimensions(width, height)) {
-          composites.add(ImagesServiceFactory.makeComposite(frameImage, 0, 0, 1, Composite.Anchor.TOP_LEFT));
-          initialHistogram = histogramWithRetry(frameImage);
+        metrics.prevDecode.start();
+        initialFrame = read(frameBytes);
+        metrics.prevDecode.stop();
+        
+        if (validateDimensions(initialFrame.getWidth(), initialFrame.getHeight())) {
+          metrics.prevComposite.start();
+          composite(0, 0, initialFrame);
+          metrics.prevComposite.stop();
         } else {
-          log.warning("Previous frame is corrupt: " + width + " x " + height);
-          width = height = 0;
-          initialHistogram = null;
+          log.warning("Previous frame is corrupt: " + initialFrame.getWidth() + " x " + initialFrame.getHeight());
+          initialFrame = null;
         }
       } else {
-        width = height = 0;
-        initialHistogram = null;
+        initialFrame = null;
       }
       patchArea = 0;
     }
   }
   
-  private int[][] histogramWithRetry(final Image image) {
-    for (int i = 0; i < 2; i++) {
-      try {
-        return imagesService.histogram(image);
-      } catch (ImagesServiceFailureException e) {
-        log.warning(Throwables.getStackTraceAsString(e));
-      }
-    }
-    return imagesService.histogram(image);
-  }
-  
-  private Image composite() {
-    return imagesService.composite(composites, width, height, 0, OutputEncoding.PNG);
-  }
-  
-  private Image compositeWithRetry() {
-    for (int i = 0; i < 2; i++) {
-      try {
-        return composite();
-      } catch (ImagesServiceFailureException e) {
-        log.warning(Throwables.getStackTraceAsString(e));
-      }
-    }
-    return composite();
-  }
-  
-  private Image convert(final Image source) {
-    return imagesService.applyTransform(
-        ImagesServiceFactory.makeResize(
-            source.getWidth(), source.getHeight()),
-        source,
-        OutputEncoding.JPEG);
-  }
-  
-  private Image convertWithRetry(final Image source) {
-
-    for (int i = 0; i < 2; i++) {
-      try {
-        return convert(source);
-      } catch (ImagesServiceFailureException e) {
-        log.warning(Throwables.getStackTraceAsString(e));
-      }
-    }
-    return convert(source);
-  }
-  
-  public void setDims(int w, int h) {
-    synchronized (compositeMutex) {
-      width = w;
-      height = h;
-    }
+  private void composite(final int x, final int y, final BufferedImage patch) {
+    g.drawImage(patch, x, y, null);
   }
   
   public void update(int x, int y, byte[] bytes) {
-    final Image patch = ImagesServiceFactory.makeImage(bytes);
+    metrics.patchDecode.start();
+    final BufferedImage patch = read(bytes);
+    metrics.patchDecode.stop();
     final int
       cwidth = x + patch.getWidth(),
       cheight = y + patch.getHeight();
     
-    if (cwidth > 0 && cwidth <= width && cheight > 0 && cheight <= height) {
+    if (cwidth > 0 && cwidth <= composite.getWidth() && cheight > 0 && cheight <= composite.getHeight()) {
       synchronized (compositeMutex) {
         patchArea += patch.getWidth() * patch.getHeight();
         
-        if (composites.size() == 15) {
-          final Image step = compositeWithRetry();
-          composites.clear();
-          composites.add(ImagesServiceFactory.makeComposite(step, 0, 0, 1, Composite.Anchor.TOP_LEFT));
-        }
-        composites.add(ImagesServiceFactory.makeComposite(patch, x, y, 1, Composite.Anchor.TOP_LEFT));
+        metrics.patchComposite.start();
+        composite(x, y, patch);
+        metrics.patchComposite.stop();
+        
+        metrics.patchCount++;
       }
     } else {
       log.warning("Invalid patch " + patch.getWidth() + " x " + patch.getHeight() +
@@ -150,40 +184,56 @@ public class Session {
     }
   }
   
-  private static long diff(int[][] a, int[][] b) {
-    long diff = 0;
-    for (int i = 0; i < a.length; i++) {
-      for (int j = 0; j < a[i].length; j++) {
-        int dx = a[i][j] - b[i][j];
-        diff += Math.abs(dx);
-      }
-    }
-    
-    log.info("diff: " + diff / DIFF_MAGNITUDE);
-    
-    return diff;
-  }
-  
   public void config(final String[] param) {
     if ("sr".equals(param[2])) {
       SCREEN_REFRACTORY = Long.parseLong(param[3]);
     } else if ("st".equals(param[2])) {
       STABLE_TIME = Long.parseLong(param[3]);
-    } else {
-      DIFF_THRESH = Long.parseLong(param[3]) * DIFF_MAGNITUDE;
     }
   }
   
+  private static boolean diff(final Color a, final Color b) {
+    return Math.abs(a.getRed() - b.getRed()) > DIFF_COLOR_THRESH ||
+           Math.abs(a.getGreen() - b.getGreen()) > DIFF_COLOR_THRESH ||
+           Math.abs(a.getBlue() - b.getBlue()) > DIFF_COLOR_THRESH;
+  }
+  
+  private boolean diff(final BufferedImage a, final BufferedImage b) {
+    final int denom = a .getHeight() / DIFF_RES * a.getWidth() / DIFF_RES;
+    final int pxThreshold = (int)(DIFF_THRESH * denom);
+
+    int acc = 0;
+    for (int y = 0; y < a.getHeight(); y += DIFF_RES) {
+        for (int x = 0; x < a.getWidth(); x += DIFF_RES) {
+            if (diff(new Color(a.getRGB(x, y)), new Color(b.getRGB(x, y)))) {
+                acc++;
+            }
+        }
+    }
+    if (acc > pxThreshold) {
+        System.out.println("diff: " + acc * 100f / denom + "%");
+        return true;
+    } else if (acc > pxThreshold / 2) {
+        System.out.println("diff: " + acc * 100f / denom + "% (below threshold)");
+    }
+
+    return false;
+}
+  
   public void commit() throws IOException {
-    final Image frameImage;
-    synchronized (compositeMutex) {
-       frameImage = compositeWithRetry();
+    if (g != null) {
+      g.dispose();
+      g = null;
     }
     
     final Long frameLastPersistedDurably = Persistence.getCachedImageLastPersistedDurably(name, "frame.jpeg");
     
+    metrics.compositeEncode.start();
+    final byte[] compositeBytes = write(composite, "png");
+    metrics.compositeEncode.stop();
+    
     if (frameLastPersistedDurably == null || System.currentTimeMillis() >= frameLastPersistedDurably + STABLE_UPDATE) {
-      final UUID frameUuid = Persistence.saveImage(name, frameImage.getImageData());
+      final UUID frameUuid = Persistence.saveImage(name, compositeBytes);
       Persistence.setRef(name, "frame.jpeg", frameUuid, true);
 
       final String stableKey = "/frame/" + name + "/stable.jpeg";
@@ -192,27 +242,23 @@ public class Session {
           .method(Method.PUT)
           .payload(Persistence.uuidToBytes(frameUuid)));
     } else {
-      Persistence.setDirect(name, "frame.jpeg", frameImage.getImageData());
+      Persistence.setDirect(name, "frame.jpeg", compositeBytes);
     }
     
     final boolean copyPrevious;
-    if (initialHistogram == null || patchArea == 0) {
+    if (initialFrame == null || patchArea == 0) {
       copyPrevious = false;
-    } else if (patchArea < width * height / 4) {
+    } else if (patchArea < composite.getWidth() * composite.getHeight() / 4) {
       copyPrevious = false;
-      log.info("Not diffing; patch area " + patchArea * 100 / width / height + "%");
+      log.info("Not diffing; patch area " + patchArea * 100 / composite.getWidth() / composite.getHeight() + "%");
     } else {
-      final int[][] frameHistogram = histogramWithRetry(frameImage);
-      
-      final long diff;
-      final int[][] initialHistogram;
+      final BufferedImage initialFrame, composite;
       synchronized (compositeMutex) {
-        initialHistogram = this.initialHistogram;
+        initialFrame = this.initialFrame;
+        composite = this.composite;
       }
       
-      diff = diff(initialHistogram, frameHistogram);
-      
-      if (diff > DIFF_THRESH) {
+      if (diff(initialFrame, composite)) {
         copyPrevious = System.currentTimeMillis() - getLastModified("previous.jpeg") > SCREEN_REFRACTORY;
       } else {
         copyPrevious = false;
@@ -228,6 +274,8 @@ public class Session {
         log.info("No stable.jpeg reference found");
       }
     }
+    
+    log.info(metrics.toString());
   }
   
   public void put(final String variant, final UUID uuid) throws IOException {
@@ -251,13 +299,10 @@ public class Session {
     } else {
       resp.setContentType("image/jpeg");
       
-      Image contentImage = ImagesServiceFactory.makeImage(content);
-      if (contentImage.getFormat() != Image.Format.JPEG) {
-        contentImage = convertWithRetry(contentImage);
-      }
+      final BufferedImage contentImage = read(content);
       
       try (final OutputStream o = resp.getOutputStream()) {
-    	  o.write(contentImage.getImageData());
+    	  ImageIO.write(contentImage, "jpeg", o);
       }
     }
   }
