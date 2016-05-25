@@ -37,30 +37,15 @@ body {
 .scroll-container {
   display: inline-block;
   position: relative;
+  height: 100%;
 }
 
 .scroll-area {
-  width: 10%;
-  height: 10%;
-  position: absolute;
-  overflow: hidden;
-}
-
-.scroll-surface {
-  width: 3000%;
-  height: 3000%;
-}
-
-#prevscroll .scroll-area {
   width: 100%;
   height: 100%;
   left: 0;
   top: 0;
-}
-
-#prevscroll .scroll-surface {
-  width: 100%;
-  height: 50%;
+  position: absolute;
 }
 
 .status {

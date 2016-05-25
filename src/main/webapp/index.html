@@ -121,26 +121,21 @@
       	}
       }
       
-      var lastClick;
+      var lastCommand, lastCommandAt = EPOCH;
       
-      function sendMouse(event) {
+      function sendMouse(command, event) {
         var img = document.getElementById("frame");
         var nx = event.offsetX / img.width,
             ny = event.offsetY / img.height;
         var args = [nx, ny].join(",");
+        var now = new Date();
         
-        if (lastClick) {
-          send(["MD", lastClick.args, args].join("|"));
-          clearTimeout(lastClick.timeout);
-          lastClick = null;
-        } else {
-          lastClick = {
-            timeout: setTimeout(function() {
-              send(["MC", args].join("|"));
-              lastClick = null;
-            }, 0),
-            args: args};
+        if ((command !== "MM" || lastCommand !== "MU") && now.getTime() - lastCommandAt.getTime() >= 200) {
+          send([command, args].join("|"));
         }
+        
+        lastCommand = command;
+        lastCommandAt = now;
       }
 
       function toggle() {
@@ -195,101 +190,16 @@
       <div id="log">
       </div>
     </div>
-    <div id="framescroll" class="scroll-container" onclick="sendMouse(event)">
+    <div id="framescroll" class="scroll-container">
       <img class="canvas" id="frame" onload="imgLoaded()">
-    </div>
-    <div id="prevscroll" class="scroll-container">
-      <img class="canvas" id="prev">
-        <div class="scroll-area">
-          <div class="scroll-surface">
-    		</div>
+      <div class="scroll-area"
+        onmousedown="sendMouse('MD', event)"
+        onmousemove="sendMouse('MM', event)"
+        onmouseup="sendMouse('MU', event)">
       </div>
     </div>
+    <img class="canvas" id="prev">
     <script type="text/javascript">
-      var framescroll = document.getElementById("framescroll");
-      
-      function scrollcell(xpct, ypct) {
-        var scrollArea = document.createElement("div"),
-            scrollSurface = document.createElement("div");
-        
-        scrollArea.className = "scroll-area";
-        scrollSurface.className = "scroll-surface";
-        
-        scrollArea.style.left = xpct + "%";
-        scrollArea.style.top = ypct + "%";
-        
-        scrollArea.appendChild(scrollSurface);
-        framescroll.appendChild(scrollArea);
-        
-        var sox, soy;
-        function resetScroll() {
-          scrollArea.scrollLeft = sox = Math.floor(scrollArea.scrollWidth / 2);
-          scrollArea.scrollTop = soy = Math.floor(scrollArea.scrollHeight / 2);
-        }
-        
-        resetScroll();
-        
-        var nx = xpct / 100,
-            ny = ypct / 100;
-        
-        scrollArea.onscroll = function() {
-          var dx = scrollArea.scrollLeft - sox,
-              dy = scrollArea.scrollTop - soy;
-          
-          if (dx || dy) {
-            debug(nx + "," + ny + "|" + dx + "," + dy);
-            
-            resetScroll();
-          }
-        };
-        
-        scrollSurface.onmousedown = function(event) {
-          debug("mousedown " + event.clientX + ", " + event.clientY);
-        };
-        
-        scrollSurface.onmouseup = function(event) {
-          debug("mouseup " + event.clientX + ", " + event.clientY);
-        };
-        
-        scrollSurface.onmousemove = function(event) {
-          debug("mousemove " + event.clientX + ", " + event.clientY);
-        };
-      }
-      
-      for (var i = 0; i < 100; i += 10) {
-        for (var j = 0; j < 100; j += 10) {
-          scrollcell(i, j);
-        }
-      }
-      
-      function debugAllEvents(obj) {
-        var events = [];
-        for (var proto = obj; proto; proto = Object.getPrototypeOf(proto)) {
-          var props = Object.getOwnPropertyNames(proto);
-          for (var i = 0; i < props.length; i++) {
-            if (props[i].substr(0, 2) === "on") {
-              events.push(props[i].substr(2));
-            }
-          }
-        }
-        
-        function debugEvent(events) {
-          for (var i = 0; i < events.length; i++) {
-            obj.addEventListener(events[i], function(evt) {
-              return function() {
-                debug(evt);
-              };
-            }(events[i]));
-          }
-        }
-        
-        debugEvent(events);
-      }
-      
-      debugAllEvents(document.getElementById("prevscroll"));
-      debugAllEvents(document.getElementById("prevscrollarea"));
-      debugAllEvents(document.getElementById("prevscrollsurface"));
-    
       proclp();
     </script>
   </body>

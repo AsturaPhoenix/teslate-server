@@ -1,9 +1,6 @@
 package io.baku.teslate;
 
-import java.io.ByteArrayOutputStream;
 import java.io.IOException;
-import java.io.ObjectInputStream;
-import java.io.ObjectOutputStream;
 import java.io.Serializable;
 import java.nio.ByteBuffer;
 import java.util.ConcurrentModificationException;
@@ -27,10 +24,6 @@ import com.google.appengine.api.memcache.ConsistentLogAndContinueErrorHandler;
 import com.google.appengine.api.memcache.MemcacheService;
 import com.google.appengine.api.memcache.MemcacheService.IdentifiableValue;
 import com.google.appengine.api.memcache.MemcacheServiceFactory;
-import com.google.appengine.api.taskqueue.Queue;
-import com.google.appengine.api.taskqueue.QueueFactory;
-import com.google.appengine.api.taskqueue.TaskOptions;
-import com.google.appengine.api.taskqueue.TaskOptions.Method;
 import com.google.common.util.concurrent.Futures;
 import com.google.common.util.concurrent.Uninterruptibles;
 
@@ -59,8 +52,6 @@ public class Persistence {
     LAST_ACCESSED_KEY = "lastAccessed",
     LAST_MODIFIED_KEY = "lastModified",
     VALUE_PROP = "value";
-  
-  private static final Queue queue = QueueFactory.getDefaultQueue();
   
   private static final MemcacheService cache = MemcacheServiceFactory.getMemcacheService();
   static {
@@ -235,30 +226,15 @@ public class Persistence {
     }
   }
   
-  private void scheduleDatastoreTaskAt(final String datastoreTaskUrl, final Serializable task) 
-      throws IOException {
-    final ByteArrayOutputStream payload = new ByteArrayOutputStream();
-    try (final ObjectOutputStream oout = new ObjectOutputStream(payload)) {
-      oout.writeObject(task);
-    }
-    queue.add(TaskOptions.Builder.withUrl(datastoreTaskUrl)
-        .method(Method.POST)
-        .payload(payload.toByteArray()));
+  private void scheduleDatastoreTask(final String name, final String variant, final Serializable task) {
+    Async.trap(Async.EXEC.submit(() -> handleDatastoreTask(name, variant, task)));
   }
   
-  private void scheduleDatastoreTask(final String name, final String variant, final Serializable task) 
-      throws IOException {
-    scheduleDatastoreTaskAt("/frame/" + name + "/" + variant, task);
+  private void scheduleDatastoreTask(final String name, final Serializable task) {
+    Async.trap(Async.EXEC.submit(() -> handleDatastoreTask(name, task)));
   }
   
-  private void scheduleDatastoreTask(final String name, final Serializable task) throws IOException {
-    scheduleDatastoreTaskAt("/frame/" + name, task);
-  }
-  
-  public static void handleDatastoreTask(final String name, final String variant,
-      final ObjectInputStream oin) throws ClassNotFoundException, IOException {
-    final Object task = oin.readObject();
-    
+  private static void handleDatastoreTask(final String name, final String variant, final Object task) {
     if (task instanceof SetDatastoreRefTask) {
       setDatastoreRef(name, variant, (SetDatastoreRefTask)task);
     } else if (task instanceof SetDatastoreLastAccessedTask) {
@@ -268,9 +244,7 @@ public class Persistence {
     }
   }
   
-  public static void handleDatastoreTask(final String name, final ObjectInputStream oin)
-      throws ClassNotFoundException, IOException {
-    final Object task = oin.readObject();
+  private static void handleDatastoreTask(final String name, final Object task) {
     saveDatastoreImage(name, (SaveDatastoreImageTask)task);
   }
   
@@ -336,6 +310,7 @@ public class Persistence {
   private static class SaveDatastoreImageTask implements Serializable {
     private static final long serialVersionUID = 1551510793636566075L;
     public final UUID uuid;
+    public final byte[] bytes;
     public final long timestamp;
   }
   
@@ -344,31 +319,26 @@ public class Persistence {
     cache.put(uuid, bytes);
     log.info(uuid + " saved to cache");
     
-    scheduleDatastoreTask(name, new SaveDatastoreImageTask(uuid, System.currentTimeMillis()));
+    scheduleDatastoreTask(name, new SaveDatastoreImageTask(uuid, bytes, System.currentTimeMillis()));
     
     return uuid;
   }
   
   private static void saveDatastoreImage(final String name, final SaveDatastoreImageTask task) {
-    final byte[] bytes = (byte[])cache.get(task.uuid);
-    if (bytes == null) {
-      log.warning("Could not persist " + task.uuid + " due to cache miss");
-    } else {
-      final Entity entity = new Entity(createKey(task.uuid));
-      entity.setUnindexedProperty(BYTES_PROP, new Blob(bytes));
-      entity.setUnindexedProperty(TIMESTAMP_PROP, task.timestamp);
-      datastore.put(entity);
-      
-      log.info(task.uuid + " saved to datastore");
+    final Entity entity = new Entity(createKey(task.uuid));
+    entity.setUnindexedProperty(BYTES_PROP, new Blob(task.bytes));
+    entity.setUnindexedProperty(TIMESTAMP_PROP, task.timestamp);
+    datastore.put(entity);
+    
+    log.info(task.uuid + " saved to datastore");
 
-      try {
-        Thread.sleep(REF_STICKINESS);
-      } catch (final InterruptedException e) {
-        log.warning(Throwables.getStackTraceAsString(e));
-      }
-      
-      evictIfUnused(name, task.uuid);
+    try {
+      Thread.sleep(REF_STICKINESS);
+    } catch (final InterruptedException e) {
+      log.warning(Throwables.getStackTraceAsString(e));
     }
+    
+    evictIfUnused(name, task.uuid);
   }
   
   private static void evictIfUnused(final String name, final UUID frame) {

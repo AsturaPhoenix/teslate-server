@@ -6,19 +6,15 @@ import java.awt.image.BufferedImage;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
-import java.io.ObjectInputStream;
 import java.io.OutputStream;
 import java.util.UUID;
+import java.util.concurrent.TimeUnit;
 
 import javax.imageio.ImageIO;
 import javax.servlet.http.HttpServletResponse;
 
 import com.google.api.client.repackaged.com.google.common.base.Throwables;
 import com.google.appengine.api.datastore.EntityNotFoundException;
-import com.google.appengine.api.taskqueue.Queue;
-import com.google.appengine.api.taskqueue.QueueFactory;
-import com.google.appengine.api.taskqueue.TaskOptions;
-import com.google.appengine.api.taskqueue.TaskOptions.Method;
 
 import lombok.RequiredArgsConstructor;
 import lombok.ToString;
@@ -38,8 +34,6 @@ public class Session {
   
   private static final float
       DIFF_THRESH = .22f;
-  
-  private static final Queue queue = QueueFactory.getDefaultQueue();
   
   private final String name;
   
@@ -83,7 +77,8 @@ public class Session {
       patchComposite = new Timer();
     private int patchCount;
     private final Timer
-      compositeEncode = new Timer();
+      compositeEncode = new Timer(),
+      diff = new Timer();
     
     public void reset() {
       prevDecode.reset();
@@ -92,6 +87,7 @@ public class Session {
       patchComposite.reset();
       patchCount = 0;
       compositeEncode.reset();
+      diff.reset();
     }
   }
   
@@ -199,6 +195,8 @@ public class Session {
   }
   
   private boolean diff(final BufferedImage a, final BufferedImage b) {
+    metrics.diff.start();
+    
     final int denom = a .getHeight() / DIFF_RES * a.getWidth() / DIFF_RES;
     final int pxThreshold = (int)(DIFF_THRESH * denom);
 
@@ -210,6 +208,9 @@ public class Session {
             }
         }
     }
+    
+    metrics.diff.stop();
+    
     if (acc > pxThreshold) {
         System.out.println("diff: " + acc * 100f / denom + "%");
         return true;
@@ -229,18 +230,21 @@ public class Session {
     final Long frameLastPersistedDurably = Persistence.getCachedImageLastPersistedDurably(name, "frame.jpeg");
     
     metrics.compositeEncode.start();
-    final byte[] compositeBytes = write(composite, "png");
+    final byte[] compositeBytes = write(composite, "gif");
     metrics.compositeEncode.stop();
     
     if (frameLastPersistedDurably == null || System.currentTimeMillis() >= frameLastPersistedDurably + STABLE_UPDATE) {
       final UUID frameUuid = Persistence.saveImage(name, compositeBytes);
       Persistence.setRef(name, "frame.jpeg", frameUuid, true);
-
-      final String stableKey = "/frame/" + name + "/stable.jpeg";
-      queue.add(TaskOptions.Builder.withUrl(stableKey)
-          .etaMillis(System.currentTimeMillis() + STABLE_TIME)
-          .method(Method.PUT)
-          .payload(Persistence.uuidToBytes(frameUuid)));
+      log.info("Persisting " + frameUuid);
+      
+      Async.trap(Async.EXEC.schedule(() -> {
+        try {
+          Persistence.setRef(name, "stable.jpeg", frameUuid, false);
+        } catch (final Exception e) {
+          log.warning(Throwables.getStackTraceAsString(e));
+        }
+      }, STABLE_TIME, TimeUnit.MILLISECONDS));
     } else {
       Persistence.setDirect(name, "frame.jpeg", compositeBytes);
     }
@@ -280,11 +284,6 @@ public class Session {
   
   public void put(final String variant, final UUID uuid) throws IOException {
     Persistence.setRef(name, variant, uuid, false);
-  }
-  
-  public void handleDatastoreTask(final String variant, final ObjectInputStream oin)
-      throws ClassNotFoundException, IOException {
-    Persistence.handleDatastoreTask(name, variant, oin);
   }
   
   public void get(final String variant, final HttpServletResponse resp) throws IOException {
