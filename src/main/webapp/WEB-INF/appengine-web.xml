@@ -5,4 +5,8 @@
     <system-properties>
        <property name="java.util.logging.config.file" value="WEB-INF/logging.properties"/>
     </system-properties>
+	<beta-settings>
+	    <setting name="java_quickstart" value="true"/>
+	</beta-settings>
+    <vm>true</vm>
 </appengine-web-app>
