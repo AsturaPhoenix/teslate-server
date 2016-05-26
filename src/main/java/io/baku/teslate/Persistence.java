@@ -22,7 +22,6 @@ import com.google.appengine.api.datastore.KeyFactory;
 import com.google.appengine.api.datastore.Transaction;
 import com.google.appengine.api.memcache.ConsistentLogAndContinueErrorHandler;
 import com.google.appengine.api.memcache.MemcacheService;
-import com.google.appengine.api.memcache.MemcacheService.IdentifiableValue;
 import com.google.appengine.api.memcache.MemcacheServiceFactory;
 import com.google.common.util.concurrent.Futures;
 import com.google.common.util.concurrent.Uninterruptibles;
@@ -38,9 +37,7 @@ public class Persistence {
     REF_STICKINESS = 10000,
     USE_POLL_PERIOD = 2000,
     FRAME_POLL_PERIOD = 50,
-    FRAME_POLL_TIMEOUT = 5000,
-    COMMAND_POLL_PERIOD = 50,
-    COMMAND_POLL_TIMEOUT = 10000;
+    FRAME_POLL_TIMEOUT = 5000;
   
   private static final String
     SESSION_KIND = "Session",
@@ -455,31 +452,5 @@ public class Persistence {
   
   private static @Nullable Long readCachedLong(final String key) {
     return (Long)cache.get(key);
-  }
-  
-  public static void pushCommand(final String name, final byte[] command) {
-    cache.put(name + "/command", command);
-  }
-  
-  public static byte[] popCommand(final String name) {
-    final String key = name + "/command";
-
-    IdentifiableValue c = cache.getIdentifiable(key);
-    
-    //Poll for changes because memcache doesn't expose distributed events
-    for (int i = 0; i < COMMAND_POLL_TIMEOUT / COMMAND_POLL_PERIOD &&
-        (c == null || c.getValue() == null); i++) {
-      try {
-        Thread.sleep(COMMAND_POLL_PERIOD);
-        c = cache.getIdentifiable(key);
-      } catch (final InterruptedException e) {
-        log.warning(Throwables.getStackTraceAsString(e));
-        break;
-      }
-    }
-    if (c != null && c.getValue() != null) {
-      cache.putIfUntouched(key, c, null);
-    }
-    return c == null? null : (byte[])c.getValue();
   }
 }

@@ -112,12 +112,13 @@
         queue(frame, 0);
       }
       
+      var seqid = 0;
       function send(msg) {
       	if (session) {
           var cmd = new XMLHttpRequest();
           cmd.open("POST", "https://teslate-server.appspot.com/command/" +
             session)
-          cmd.send(msg);
+          cmd.send(seqid++ + "|" + msg);
       	}
       }
       
@@ -132,10 +133,10 @@
         
         if ((command !== "MM" || lastCommand !== "MU") && now.getTime() - lastCommandAt.getTime() >= 200) {
           send([command, args].join("|"));
+          lastCommandAt = now;
         }
         
         lastCommand = command;
-        lastCommandAt = now;
       }
 
       function toggle() {

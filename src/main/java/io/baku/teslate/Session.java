@@ -7,8 +7,11 @@ import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.OutputStream;
+import java.util.ArrayList;
 import java.util.UUID;
+import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
+import java.util.stream.Collectors;
 
 import javax.imageio.ImageIO;
 import javax.servlet.http.HttpServletResponse;
@@ -28,6 +31,9 @@ public class Session {
       STABLE_UPDATE = 2000,
       STABLE_TIME = 2000;
   
+  private static final long
+      COMMAND_TIMEOUT = 10000;
+  
   private static final int
       DIFF_COLOR_THRESH = 128,
       DIFF_RES = 5;
@@ -38,7 +44,7 @@ public class Session {
   private final String name;
   
   private final Object compositeMutex = new Object();
-  private BufferedImage initialFrame, composite;
+  private BufferedImage frame, composite;
   private Graphics2D g;
   private int patchArea;
   
@@ -130,23 +136,25 @@ public class Session {
   }
   
   public void refresh() {
-    final byte[] frameBytes = Persistence.getImageBytes(name, "frame.jpeg");
     synchronized (compositeMutex) {
-      if (frameBytes != null) {
-        metrics.prevDecode.start();
-        initialFrame = read(frameBytes);
-        metrics.prevDecode.stop();
-        
-        if (validateDimensions(initialFrame.getWidth(), initialFrame.getHeight())) {
-          metrics.prevComposite.start();
-          composite(0, 0, initialFrame);
-          metrics.prevComposite.stop();
+      if (frame == null) {
+        final byte[] frameBytes = Persistence.getImageBytes(name, "frame.jpeg");
+        if (frameBytes != null) {
+          metrics.prevDecode.start();
+          frame = read(frameBytes);
+          metrics.prevDecode.stop();
+          
+          if (validateDimensions(frame.getWidth(), frame.getHeight())) {
+            metrics.prevComposite.start();
+            composite(0, 0, frame);
+            metrics.prevComposite.stop();
+          } else {
+            log.warning("Previous frame is corrupt: " + frame.getWidth() + " x " + frame.getHeight());
+            frame = null;
+          }
         } else {
-          log.warning("Previous frame is corrupt: " + initialFrame.getWidth() + " x " + initialFrame.getHeight());
-          initialFrame = null;
+          frame = null;
         }
-      } else {
-        initialFrame = null;
       }
       patchArea = 0;
     }
@@ -227,59 +235,67 @@ public class Session {
       g = null;
     }
     
-    final Long frameLastPersistedDurably = Persistence.getCachedImageLastPersistedDurably(name, "frame.jpeg");
-    
-    metrics.compositeEncode.start();
-    final byte[] compositeBytes = write(composite, "gif");
-    metrics.compositeEncode.stop();
-    
-    if (frameLastPersistedDurably == null || System.currentTimeMillis() >= frameLastPersistedDurably + STABLE_UPDATE) {
-      final UUID frameUuid = Persistence.saveImage(name, compositeBytes);
-      Persistence.setRef(name, "frame.jpeg", frameUuid, true);
-      log.info("Persisting " + frameUuid);
-      
-      Async.trap(Async.EXEC.schedule(() -> {
-        try {
-          Persistence.setRef(name, "stable.jpeg", frameUuid, false);
-        } catch (final Exception e) {
-          log.warning(Throwables.getStackTraceAsString(e));
-        }
-      }, STABLE_TIME, TimeUnit.MILLISECONDS));
-    } else {
-      Persistence.setDirect(name, "frame.jpeg", compositeBytes);
+    synchronized(compositeMutex) {
+      frame = composite;
+      compositeMutex.notifyAll();
     }
     
-    final boolean copyPrevious;
-    if (initialFrame == null || patchArea == 0) {
-      copyPrevious = false;
-    } else if (patchArea < composite.getWidth() * composite.getHeight() / 4) {
-      copyPrevious = false;
-      log.info("Not diffing; patch area " + patchArea * 100 / composite.getWidth() / composite.getHeight() + "%");
-    } else {
-      final BufferedImage initialFrame, composite;
-      synchronized (compositeMutex) {
-        initialFrame = this.initialFrame;
-        composite = this.composite;
-      }
+    Async.trap(Async.EXEC.submit(() -> {
+      final Long frameLastPersistedDurably = Persistence.getCachedImageLastPersistedDurably(name, "frame.jpeg");
       
-      if (diff(initialFrame, composite)) {
-        copyPrevious = System.currentTimeMillis() - getLastModified("previous.jpeg") > SCREEN_REFRACTORY;
+      metrics.compositeEncode.start();
+      final byte[] compositeBytes = write(composite, "gif");
+      metrics.compositeEncode.stop();
+      
+      if (frameLastPersistedDurably == null || System.currentTimeMillis() >= frameLastPersistedDurably + STABLE_UPDATE) {
+        final UUID frameUuid = Persistence.saveImage(name, compositeBytes);
+        Persistence.setRef(name, "frame.jpeg", frameUuid, true);
+        log.info("Persisting " + frameUuid);
+        
+        Async.trap(Async.EXEC.schedule(() -> {
+          try {
+            Persistence.setRef(name, "stable.jpeg", frameUuid, false);
+          } catch (final Exception e) {
+            log.warning(Throwables.getStackTraceAsString(e));
+          }
+        }, STABLE_TIME, TimeUnit.MILLISECONDS));
       } else {
+        Persistence.setDirect(name, "frame.jpeg", compositeBytes);
+      }
+      
+      final boolean copyPrevious;
+      if (frame == null || patchArea == 0) {
         copyPrevious = false;
+      } else if (patchArea < composite.getWidth() * composite.getHeight() / 4) {
+        copyPrevious = false;
+        log.info("Not diffing; patch area " + patchArea * 100 / composite.getWidth() / composite.getHeight() + "%");
+      } else {
+        final BufferedImage initialFrame, composite;
+        synchronized (compositeMutex) {
+          initialFrame = this.frame;
+          composite = this.composite;
+        }
+        
+        if (diff(initialFrame, composite)) {
+          copyPrevious = System.currentTimeMillis() - getLastModified("previous.jpeg") > SCREEN_REFRACTORY;
+        } else {
+          copyPrevious = false;
+        }
       }
-    }
-
-    if (copyPrevious) {
-      try {
-        final UUID stableUuid = Persistence.getRef(name, "stable.jpeg");
-        log.info("Copying previous");
-        Persistence.setRef(name, "previous.jpeg", stableUuid, true);
-      } catch (final EntityNotFoundException e) {
-        log.info("No stable.jpeg reference found");
+  
+      if (copyPrevious) {
+        try {
+          final UUID stableUuid = Persistence.getRef(name, "stable.jpeg");
+          log.info("Copying previous");
+          Persistence.setRef(name, "previous.jpeg", stableUuid, true);
+        } catch (final EntityNotFoundException e) {
+          log.info("No stable.jpeg reference found");
+        }
       }
-    }
-    
-    log.info(metrics.toString());
+      
+      log.info(metrics.toString());
+      return null;
+    }));
   }
   
   public void put(final String variant, final UUID uuid) throws IOException {
@@ -312,5 +328,39 @@ public class Session {
   
   public long awaitLastModified(final String variant) throws IOException {
     return Persistence.awaitImageLastModified(name, variant);
+  }
+  
+  private final ArrayList<Command> commands = new ArrayList<>();
+  
+  public void pushCommand(final byte[] data) {
+    final Command command = new Command(data);
+    synchronized(commands) {
+      int i;
+      for (i = commands.size(); i > 0; i--) {
+        if (commands.get(i).getSequenceId() <= command.getSequenceId()) {
+          break;
+        }
+      }
+      commands.add(i, command);
+      commands.notifyAll();
+    }
+  }
+  
+  public byte[] flushCommands() {
+    synchronized(commands) {
+      if (commands.isEmpty()) {
+        try {
+          commands.wait(COMMAND_TIMEOUT);
+        } catch (final InterruptedException e) {
+          log.warning(Throwables.getStackTraceAsString(e));
+        }
+      }
+      
+      final String serialized = commands.stream()
+        .map(Command::getCommandString)
+        .collect(Collectors.joining("\n"));
+      commands.clear();
+      return serialized.getBytes();
+    }
   }
 }

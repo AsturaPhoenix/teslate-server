@@ -15,13 +15,13 @@ public class CommandServlet extends HttpServlet {
 
   @Override
   protected void doPost(final HttpServletRequest req, final HttpServletResponse resp) throws ServletException, IOException {
-    Persistence.pushCommand(req.getPathInfo(), ByteStreams.toByteArray(req.getInputStream()));
+    Sessions.getOrCreate(new PathInfo(req).name).pushCommand(ByteStreams.toByteArray(req.getInputStream()));
   }
   
   @Override
-  protected void doGet(HttpServletRequest req, HttpServletResponse resp) throws ServletException, IOException {
+  protected void doGet(final HttpServletRequest req, final HttpServletResponse resp) throws ServletException, IOException {
     resp.setContentType("text/plain");
-    final byte[] command = Persistence.popCommand(req.getPathInfo());
+    final byte[] command = Sessions.getOrCreate(new PathInfo(req).name).flushCommands();
     if (command == null) {
       resp.sendError(HttpServletResponse.SC_NO_CONTENT);
     } else {
