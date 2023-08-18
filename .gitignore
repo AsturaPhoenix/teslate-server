@@ -26,3 +26,6 @@ buildNumber.properties
 .classpath
 .project
 .settings/
+
+## VS Code ##
+.vscode/settings.json
