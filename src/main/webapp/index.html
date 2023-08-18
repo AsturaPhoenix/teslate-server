@@ -1,207 +1,218 @@
 <!DOCTYPE html>
 <html>
-  <head>
-    <title>Teslate</title>
-    <script type="text/javascript">
-      var session = decodeURIComponent(location.search.substring(1));
-      
-      if (!session) {
-        var randRange = 3656158440062976; // 36^10 < 2^54
-        function randPart() {
-          return Math.floor(Math.random() * randRange).toString(36);
-        }
-        session = randPart() + randPart();
-        
-        location.search = session;
+
+<head>
+  <title>Teslate</title>
+  <link rel="stylesheet"
+    href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@48,400,0,0" />
+  <script type="text/javascript">
+    var session = decodeURIComponent(location.search.substring(1));
+
+    if (!session) {
+      var randRange = 3656158440062976; // 36^10 < 2^54
+      function randPart() {
+        return Math.floor(Math.random() * randRange).toString(36);
       }
-    
-      var lastError;
-      
-      window.onerror = function(message, url, lineNumber) {
-        lastError = message + "\n" + url + ":" + lineNumber;
-      };
-      
-      var isStopped = false;
-      var now = new Date();
-      var EPOCH = new Date(0);
-      var lastReload = now,
-          lastProc = now,
-          lastFrameQuery = EPOCH,
-          lastFrame = EPOCH,
-          lastScreenQuery = EPOCH,
-          lastScreen = EPOCH;
-      
-      function debugInfo() {
-        var debug = document.getElementById("debug");
-        var status = document.getElementById("status");
-        
-        var staleness = lastProc.getTime() - lastFrame.getTime();
-        if (staleness > 15000) {
-          status.className = "status stale";
-        } else if (staleness > 7500) {
-          status.className = "status warning";
-        } else {
-          status.className = "status ok";
-        }
-        
-        if (lastError) {
-          debug.innerText = lastError;
-        }
+      session = randPart() + randPart();
+
+      location.search = session;
+    }
+
+    var lastError;
+
+    window.onerror = function (message, url, lineNumber) {
+      lastError = message + "\n" + url + ":" + lineNumber;
+    };
+
+    var isStopped = false;
+    var now = new Date();
+    var EPOCH = new Date(0);
+    var lastReload = now,
+      lastProc = now,
+      lastFrameQuery = EPOCH,
+      lastFrame = EPOCH,
+      lastScreenQuery = EPOCH,
+      lastScreen = EPOCH;
+
+    function debugInfo() {
+      var debug = document.getElementById("debug");
+      var status = document.getElementById("status");
+
+      var staleness = lastProc.getTime() - lastFrame.getTime();
+      if (staleness > 15000) {
+        status.className = "status stale";
+      } else if (staleness > 7500) {
+        status.className = "status warning";
+      } else {
+        status.className = "status ok";
       }
 
-      function queue(f, freq) {
-        if (!isStopped) {
-          setTimeout(f, freq);
-        }
+      if (lastError) {
+        debug.innerText = lastError;
+      }
+    }
+
+    function queue(f, freq) {
+      if (!isStopped) {
+        setTimeout(f, freq);
+      }
+    }
+
+    function proclp() {
+      lastProc = new Date();
+
+      if (lastProc.getTime() - lastFrame.getTime() > 20000 &&
+        lastProc.getTime() - lastReload.getTime() > 3000) {
+        lastReload = lastProc;
+        location.reload();
       }
 
-      function proclp() {
-        lastProc = new Date();
-        
-        if (lastProc.getTime() - lastFrame.getTime() > 20000 &&
-            lastProc.getTime() - lastReload.getTime() > 3000) {
-          lastReload = lastProc;
-          location.reload();
-        }
-
-        if (lastProc.getTime() - lastFrameQuery.getTime() > 7500) {
-          frame();
-        }
-
-        if (lastProc.getTime() - lastScreenQuery.getTime() > 10000) {
-          screen();
-        }
-
-        debugInfo();
-
-        queue(proclp, 1000);
+      if (lastProc.getTime() - lastFrameQuery.getTime() > 7500) {
+        frame();
       }
 
-      function frame() {
-        lastFrameQuery = new Date();
-        document.getElementById("frame").src =
-          "https://teslate-server.appspot.com/frame/" + session +
-          "/frame.jpeg?v=" + lastFrameQuery.getTime();
+      if (lastProc.getTime() - lastScreenQuery.getTime() > 10000) {
+        screen();
       }
 
-      function screen() {
-        lastScreenQuery = new Date();
-        var ph = new XMLHttpRequest();
-        ph.open("HEAD", "https://teslate-server.appspot.com/frame/" + session +
-          "/previous.jpeg");
-        ph.onreadystatechange = function() {
-          if (ph.readyState == 4) {
-            var newScreen = new Date(ph.getResponseHeader("Last-Modified"));
-            if (newScreen.getTime() > lastScreen.getTime()) {
-              document.getElementById("prev").src =
-                "https://teslate-server.appspot.com/frame/" + session +
-                "/previous.jpeg?v=" + lastScreenQuery.getTime();
-              lastScreen = newScreen;
-              queue(screen, 2000);
-            } else {
-              queue(screen, 0);
-            }
+      debugInfo();
+
+      queue(proclp, 1000);
+    }
+
+    function frame() {
+      lastFrameQuery = new Date();
+      document.getElementById("frame").src = "frame/" + session +
+        "/frame.jpeg?v=" + lastFrameQuery.getTime();
+    }
+
+    function screen() {
+      lastScreenQuery = new Date();
+      var ph = new XMLHttpRequest();
+      ph.open("HEAD", "frame/" + session + "/previous.jpeg");
+      ph.onreadystatechange = function () {
+        if (ph.readyState == 4) {
+          var newScreen = new Date(ph.getResponseHeader("Last-Modified"));
+          if (newScreen.getTime() > lastScreen.getTime()) {
+            document.getElementById("prev").src = "frame/" + session +
+              "/previous.jpeg?v=" + lastScreenQuery.getTime();
+            lastScreen = newScreen;
+            queue(screen, 2000);
+          } else {
+            queue(screen, 0);
           }
-        };
-        ph.send();
-      }
+        }
+      };
+      ph.send();
+    }
 
-      function imgLoaded() {
+    function imgLoaded() {
+      lastFrame = new Date();
+      debugInfo();
+      queue(frame, 0);
+    }
+
+    var seqid = 0;
+    function send(msg) {
+      if (session) {
+        var cmd = new XMLHttpRequest();
+        cmd.open("POST", "command/" + session);
+        msg = seqid++ + "|" + msg;
+        cmd.send(msg);
+      }
+    }
+
+    var lastCommand = "MU", lastCommandAt = EPOCH;
+
+    function sendMouse(command, event) {
+      var img = document.getElementById("frame");
+      var nx = event.offsetX / img.width,
+        ny = event.offsetY / img.height;
+      var args = [nx, ny].join(",");
+      var now = new Date();
+
+      if (command !== "MM" || lastCommand !== "MU" && now.getTime() - lastCommandAt.getTime() >= 200) {
+        send([command, args].join("|"));
+        lastCommandAt = now;
+        lastCommand = command;
+      }
+    }
+
+    function toggle() {
+      var bn = document.getElementById("togglebn");
+      if (isStopped) {
+        bn.innerText = "stop";
+        isStopped = false;
         lastFrame = new Date();
-        debugInfo();
-        queue(frame, 0);
+        proclp();
+      } else {
+        bn.innerText = "play_arrow";
+        isStopped = true;
       }
-      
-      var seqid = 0;
-      function send(msg) {
-      	if (session) {
-          var cmd = new XMLHttpRequest();
-          cmd.open("POST", "https://teslate-server.appspot.com/command/" +
-            session);
-          msg = seqid++ + "|" + msg;
-          cmd.send(msg);
-      	}
-      }
-      
-      var lastCommand = "MU", lastCommandAt = EPOCH;
-      
-      function sendMouse(command, event) {
-        var img = document.getElementById("frame");
-        var nx = event.offsetX / img.width,
-            ny = event.offsetY / img.height;
-        var args = [nx, ny].join(",");
-        var now = new Date();
-        
-        if (command !== "MM" || lastCommand !== "MU" && now.getTime() - lastCommandAt.getTime() >= 200) {
-          send([command, args].join("|"));
-          lastCommandAt = now;
-          lastCommand = command;
-        }
-      }
+    }
 
-      function toggle() {
-        var bn = document.getElementById("togglebn");
-        if (isStopped) {
-          bn.src = "https://raw.githubusercontent.com/google/material-design-icons/master/av/1x_web/ic_stop_white_24dp.png";
-          isStopped = false;
-          lastFrame = new Date();
-          proclp();
-        } else {
-          bn.src = "https://raw.githubusercontent.com/google/material-design-icons/master/av/1x_web/ic_play_arrow_white_24dp.png";
-          isStopped = true;
-        }
-      }
-      
-      function debug(msg) {
-        var elem = document.getElementById("log");
-        elem.innerText = msg + "\n" + elem.innerText;
-      }
-    </script>
-    <link rel="stylesheet" href="style.css">
-  </head>
-  <body>
-    <div class="controls">
-      <div id="debug">
-      </div>
-      <table class="buttons">
-        <tr>
-          <td colspan="6" onclick="toggle()">
-            <div id="status" class="status">
-              <img id="togglebn" src="https://raw.githubusercontent.com/google/material-design-icons/master/av/1x_web/ic_stop_white_24dp.png">
-            </div>
-          </td>
-        <tr>
-          <td colspan="3" onclick="send('ZI')">
-            <img src="https://raw.githubusercontent.com/google/material-design-icons/master/action/1x_web/ic_zoom_in_white_24dp.png">
-          </td>
-          <td colspan="3" onclick="send('ZO')">
-            <img src="https://raw.githubusercontent.com/google/material-design-icons/master/action/1x_web/ic_zoom_out_white_24dp.png">
-          </td>
-        <tr>
-          <td colspan="2" onclick="send('R')">
-            <img src="https://raw.githubusercontent.com/google/material-design-icons/master/action/1x_web/ic_launch_white_24dp.png">
-          </td>
-          <td class="home" colspan="2" onclick="send('H')">
-            <img src="https://raw.githubusercontent.com/google/material-design-icons/master/action/1x_web/ic_home_white_24dp.png">
-          </td>
-          <td class="back" colspan="2" onclick="send('B')">
-            <img src="https://raw.githubusercontent.com/google/material-design-icons/master/navigation/1x_web/ic_arrow_back_white_24dp.png">
-          </td>
-      </table>
-      <div id="log">
-      </div>
+    function debug(msg) {
+      var elem = document.getElementById("log");
+      elem.innerText = msg + "\n" + elem.innerText;
+    }
+  </script>
+  <link rel="stylesheet" href="style.css">
+</head>
+
+<body>
+  <div class="controls">
+    <div id="debug">
     </div>
-    <div id="framescroll" class="scroll-container">
-      <img class="canvas" id="frame" onload="imgLoaded()">
-      <div class="scroll-area"
-        onmousedown="sendMouse('MD', event)"
-        onmousemove="sendMouse('MM', event)"
-        onmouseup="sendMouse('MU', event)">
-      </div>
+    <table class="buttons">
+      <tr>
+        <td colspan="6" onclick="toggle()">
+          <div id="status" class="status">
+            <span id="togglebn" class="material-symbols-outlined">
+              stop
+            </span>
+          </div>
+        </td>
+      <tr>
+        <td colspan="3" onclick="send('ZI')">
+          <span class="material-symbols-outlined">
+            zoom_in
+          </span>
+        </td>
+        <td colspan="3" onclick="send('ZO')">
+          <span class="material-symbols-outlined">
+            zoom_out
+          </span>
+        </td>
+      <tr>
+        <td colspan="2" onclick="send('R')">
+          <span class="material-symbols-outlined">
+            launch
+          </span>
+        </td>
+        <td class="home" colspan="2" onclick="send('H')">
+          <span class="material-symbols-outlined">
+            home
+          </span>
+        </td>
+        <td class="back" colspan="2" onclick="send('B')">
+          <span class="material-symbols-outlined">
+            arrow_back
+          </span>
+        </td>
+    </table>
+    <div id="log">
     </div>
-    <img class="canvas" id="prev">
-    <script type="text/javascript">
-      proclp();
-    </script>
-  </body>
+  </div>
+  <div id="framescroll" class="scroll-container">
+    <img class="canvas" id="frame" onload="imgLoaded()">
+    <div class="scroll-area" onmousedown="sendMouse('MD', event)" onmousemove="sendMouse('MM', event)"
+      onmouseup="sendMouse('MU', event)">
+    </div>
+  </div>
+  <img class="canvas" id="prev">
+  <script type="text/javascript">
+    proclp();
+  </script>
+</body>
+
 </html>

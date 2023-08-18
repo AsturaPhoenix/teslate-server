@@ -14,5 +14,4 @@
 	<env-variables>
 	    <env-var name="JAVA_OPTS" value="-Djava.library.path=/var/lib/jetty/webapps/root/WEB-INF/lib"/>
 	</env-variables>
-    <vm>true</vm>
 </appengine-web-app>

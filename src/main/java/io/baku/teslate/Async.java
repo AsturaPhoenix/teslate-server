@@ -15,19 +15,19 @@ import lombok.extern.java.Log;
 @UtilityClass
 @Log
 public class Async {
-  public static final ListeningScheduledExecutorService EXEC =
-      MoreExecutors.listeningDecorator(Executors.newScheduledThreadPool(16));
-  
+  public static final ListeningScheduledExecutorService EXEC = MoreExecutors
+      .listeningDecorator(Executors.newScheduledThreadPool(16));
+
   public static void trap(final ListenableFuture<?> future) {
     Futures.addCallback(future, new FutureCallback<Object>() {
       @Override
       public void onSuccess(final Object result) {
       }
-      
+
       @Override
       public void onFailure(final Throwable t) {
         log.warning(Throwables.getStackTraceAsString(t));
       }
-    });
+    }, EXEC);
   }
 }
