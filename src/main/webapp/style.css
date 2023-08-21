@@ -55,7 +55,7 @@ body {
   display: inline-block;
 }
 
-.status img {
+.status * {
   margin-top: 4px;
 }
 

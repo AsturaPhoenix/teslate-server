@@ -14,12 +14,14 @@ public class CommandServlet extends HttpServlet {
   private static final long serialVersionUID = -1059865976923447315L;
 
   @Override
-  protected void doPost(final HttpServletRequest req, final HttpServletResponse resp) throws ServletException, IOException {
+  protected void doPost(final HttpServletRequest req, final HttpServletResponse resp)
+      throws ServletException, IOException {
     Sessions.getOrCreate(new PathInfo(req).name).pushCommand(ByteStreams.toByteArray(req.getInputStream()));
   }
-  
+
   @Override
-  protected void doGet(final HttpServletRequest req, final HttpServletResponse resp) throws ServletException, IOException {
+  protected void doGet(final HttpServletRequest req, final HttpServletResponse resp)
+      throws ServletException, IOException {
     resp.setContentType("text/plain");
     final byte[] command = Sessions.getOrCreate(new PathInfo(req).name).flushCommands();
     if (command == null) {
